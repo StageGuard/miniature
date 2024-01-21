@@ -1,0 +1,3 @@
+[workspace]
+members=["bootloader-efi", "kernel", "build-image"]
+resolver = "2"

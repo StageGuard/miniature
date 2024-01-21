@@ -1,0 +1,26 @@
+[package]
+name = "bootloader"
+version = "0.1.0"
+edition = "2021"
+authors = ["StageGuard <beamiscool@qq.com>"]
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+uefi = { version = "0.26.0", default-features = false }
+uefi-services = "0.23.0"
+x86_64 = "0.14.11"
+xmas-elf = "0.9.1"
+
+log = "0.4.20"
+bitflags = "2.4.2"
+noto-sans-mono-bitmap = { version = "0.2.0", default-features = false, features = [
+    "regular",
+    "size_16",
+    "unicode-basic-latin",
+    "unicode-specials"
+] }
+
+spin = "0.9.8"
+buddy_system_allocator = { version = "0.9", features = ["use_spin"]}
+lazy_static = { version = "1.4.0", features = ["spin_no_std"] }

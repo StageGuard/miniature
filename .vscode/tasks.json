@@ -1,0 +1,77 @@
+{
+    "version": "2.0.0",
+    "presentation": {
+        "showReuseMessage": false, 
+        "clear": true
+    },
+    "tasks": [
+        {
+            "label": "build_bootloader",
+            "type": "cargo",
+            "command": "build",
+            "args": [
+                "-p", 
+                "bootloader", 
+                "--target",
+                "x86_64-unknown-uefi"
+            ],
+            "presentation": {
+                "showReuseMessage": false, 
+                "clear": true
+            },
+        },{
+            "label": "build_kernel",
+            "type": "cargo",
+            "command": "build",
+            "args": [
+                "-p", 
+                "kernel", 
+                "--target",
+                "x86_64-unknown-none"
+            ],
+            "presentation": {
+                "showReuseMessage": false, 
+                "clear": true
+            },
+        }, {
+            "label": "build",
+            "dependsOn": ["build_bootloader", "build_kernel"],
+        }, {
+            "label": "build_bootable_disk_image",
+            "type": "cargo",
+            "command": "run",
+            "args": [
+                "--bin",
+                "build-image",
+                "--",
+                "EFI/BOOT/BOOTX64.EFI->${workspaceFolder}\\target\\x86_64-unknown-uefi\\debug\\bootloader.efi;kernel-x86_64->${workspaceFolder}\\target\\x86_64-unknown-none\\debug\\kernel",
+                "${workspaceFolder}\\target/asos.img"
+            ],
+            "isBackground": true,
+        }, {
+            "label": "run_qemu",
+            "type": "shell",
+            "command": "qemu-system-x86_64",
+            "args": [
+                "-drive",
+                "if=pflash,format=raw,readonly=on,file=\"${workspaceFolder}\\edk2\\edk2-x86_64-code.fd\",readonly=on",
+                "-drive",
+                "format=raw,file=\"${workspaceFolder}\\target\\asos.img\"",
+                "-device", 
+                "isa-debug-exit,iobase=0xf4,iosize=0x04"
+            ]
+        }, {
+            "label": "launch",
+            "dependsOn": ["build", "build_bootable_disk_image", "run_qemu"],
+            "dependsOrder": "sequence"
+        }, {
+            "label": "launch_without_building_kernel",
+            "dependsOn": ["build_bootloader", "build_bootable_disk_image", "run_qemu"],
+            "dependsOrder": "sequence"
+        }, {
+            "label": "launch_without_building_bootloader",
+            "dependsOn": ["build_kernel", "build_bootable_disk_image", "run_qemu"],
+            "dependsOrder": "sequence"
+        }
+    ]
+}
