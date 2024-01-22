@@ -1,4 +1,4 @@
-use alloc::{vec::Vec, slice};
+use core::slice;
 use log::{warn, info};
 use uefi::table::{SystemTable, Boot};
 
@@ -6,7 +6,7 @@ use crate::mem::page_allocator::boot::allocate_zeroed_page_aligned;
 
 #[repr(packed)]
 #[derive(Clone, Copy, Debug)]
-struct Rsdp {
+pub struct Rsdp {
     signature: [u8; 8], // b"RSD PTR "
     chksum: u8,
     oem_id: [u8; 6],
@@ -53,16 +53,29 @@ fn validate_rsdp(address: usize) -> core::result::Result<usize, ()> {
 
 pub fn find_acpi_table_pointer(system_table: &SystemTable<Boot>) -> Option<(*mut u8, usize)> {
     let config_table = system_table.config_table();
-    let mut rsdps_area = Vec::new();
+
+    let mut rsdps_area: [u8; 128] = [0u8; 128];
+    let mut rsdps_len = 4;
 
     for entry in config_table {
         match validate_rsdp(entry.address as usize) {
             Ok(len) => {
-                let align = 8;
+                rsdps_area[0..rsdps_len].copy_from_slice(&u32::to_ne_bytes(len as u32));
+                
+                let ptr2 = unsafe { core::slice::from_raw_parts(entry.address as *const u8, len) };
 
-                rsdps_area.extend(&u32::to_ne_bytes(len as u32));
-                rsdps_area.extend(unsafe { core::slice::from_raw_parts(entry.address as *const u8, len) });
-                rsdps_area.resize(((rsdps_area.len() + (align - 1)) / align) * align, 0u8);
+                let total_len =  rsdps_len + ptr2.len();
+                if total_len > 128 {
+                    warn!("rsdp buffer is overflowed, size = {}", total_len);
+                    return None
+                }
+
+                rsdps_area[rsdps_len..total_len].copy_from_slice(ptr2);
+                rsdps_len += ptr2.len();
+
+                rsdps_len += if rsdps_len & 8 == 0 { 0 } else { 8 - (rsdps_len % 8) };
+                
+                break;
             }
             Err(_) => warn!("Found RSDP that was not valid at {:p}", entry.address as *const u8),
         }
@@ -72,8 +85,8 @@ pub fn find_acpi_table_pointer(system_table: &SystemTable<Boot>) -> Option<(*mut
         unsafe {
             // Copy to page aligned area
             let rsdps_base = allocate_zeroed_page_aligned(system_table, rsdps_area.len());
-            slice::from_raw_parts_mut(rsdps_base, rsdps_area.len()).copy_from_slice(&rsdps_area);
-            info!("acpi table: 0x${:x}, size = {}", rsdps_base as usize, rsdps_area.len());
+            slice::from_raw_parts_mut(rsdps_base, rsdps_len).copy_from_slice(&rsdps_area[..rsdps_len]);
+            info!("acpi table: 0x{:x}, size = {}", rsdps_base as usize, rsdps_len);
             Some((rsdps_base, rsdps_area.len()))
         }
     } else {

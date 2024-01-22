@@ -1,5 +1,21 @@
-use core::fmt;
-use log::info;
+use core::{fmt, sync::atomic::AtomicPtr, ffi::c_void, ptr, panic::PanicInfo, arch::asm};
+use lazy_static::lazy_static;
+use log::{info, error, log};
+
+use crate::device::qemu::exit_qemu;
+
+lazy_static! {
+    static ref SYSTEM_TABLE_BOOT: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());
+}
+
+#[panic_handler]
+fn panic_handler(info: &PanicInfo) -> ! {
+    error!("PANIC: {:?}", info);
+
+    loop {
+        unsafe { asm!("hlt", options(nomem, nostack)); }
+    }
+}
 
 pub trait PrintPanic<R> {
     fn or_panic(self, msg: &str) -> R;

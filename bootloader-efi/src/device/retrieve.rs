@@ -1,5 +1,5 @@
-use alloc::string::ToString;
-use alloc::vec::Vec;
+use core::mem::MaybeUninit;
+
 use log::{info, warn};
 use uefi::proto::Protocol;
 use uefi::proto::device_path::media::RamDisk;
@@ -10,7 +10,7 @@ use uefi::proto::media::block::BlockIO;
 use uefi::proto::media::partition::PartitionInfo;
 use uefi::table::{Boot, SystemTable};
 use uefi::table::boot::{SearchType, BootServices, ScopedProtocol};
-use crate::print_panic::PrintPanic;
+use crate::panic::PrintPanic;
 
 #[derive(Debug)]
 pub struct ProtocolWithHandle<'a, P : Protocol> {
@@ -20,35 +20,34 @@ pub struct ProtocolWithHandle<'a, P : Protocol> {
 }
 
 
-pub fn list_handles<P : Protocol>(boot_services: &BootServices) -> Vec<ProtocolWithHandle<P>> {
+pub fn list_handles<'a, P : Protocol>(boot_services: &'a BootServices, out: &mut [MaybeUninit<ProtocolWithHandle<'a, P>>]) -> usize {
     let handle_buffer = boot_services
         .locate_handle_buffer(SearchType::ByProtocol(&P::GUID))
         .or_panic("failed to locate protocol handle buffers");
 
-    let mut handles = Vec::with_capacity(handle_buffer.len());
-
-    for h in handle_buffer.iter() {
+    let mut idx: usize = 0;
+    handle_buffer.iter().for_each(|h| {
         let protocol = boot_services.open_protocol_exclusive::<P>(*h);
         if protocol.is_err() {
-            continue;
+            return;
         }
 
         let device_path = boot_services.open_protocol_exclusive::<DevicePath>(*h);
         if device_path.is_err() {
             warn!("failed to open protocol DevicePath of handle {:?}: {}", h, device_path.unwrap_err());
-            continue;
+            return;
         }
         let device_path = device_path.unwrap();
         let device_path_str = get_device_path_str(boot_services, &device_path);
 
-        handles.push( ProtocolWithHandle {
+        out[idx] = MaybeUninit::new(ProtocolWithHandle {
             handle: *h, 
             protocol: protocol.unwrap(),
             device_path_string: device_path_str
-        })
-    }
-
-    handles
+        });
+        idx += 1;
+    });
+    idx
 }
 
 pub fn get_device_path_str<'a>(boot_services: &'a BootServices, device_path: &ScopedProtocol<'a, DevicePath>) -> PoolString<'a> {

@@ -1,12 +1,10 @@
 use core::{mem::MaybeUninit, fmt::Write};
 
-use alloc::format;
 use lazy_static::lazy_static;
 use log::info;
 use spin::mutex::Mutex;
 use uefi::table::{SystemTable, Boot};
 
-use crate::device::qemu::exit_qemu;
 use crate::framebuffer::Framebuffer;
 use crate::logger::writer::FrameBufferWriter;
 use crate::sync::upsafe_cell::UPSafeCell;
@@ -37,9 +35,8 @@ impl log::Log for FramebufferLogger<'_> {
 
     fn log(&self, record: &log::Record) {
         let mut fb_writter = self.writter.lock();
-        let buf = format!( "{:5}: {}", record.level(), record.args());
-
-        fb_writter.write_str(buf.as_str());
+        
+        writeln!(fb_writter, "{:5}: {}", record.level(), record.args());
     }
 
     fn flush(&self) {

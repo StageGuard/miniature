@@ -1,7 +1,6 @@
-use core::{slice, mem::size_of};
+use core::{slice, mem::size_of, fmt};
 
-use crate::{framebuffer::{Framebuffer, FBPixelFormat}, print_panic::PrintPanic, device::qemu::exit_qemu};
-use alloc::fmt;
+use crate::{framebuffer::{Framebuffer, FBPixelFormat}, panic::PrintPanic, device::qemu::exit_qemu};
 use noto_sans_mono_bitmap::{
     get_raster, get_raster_width, FontWeight, RasterHeight, RasterizedChar,
 };
@@ -114,7 +113,6 @@ impl fmt::Write for FrameBufferWriter<'_> {
         for c in s.chars() {
             self.write_char(c);
         }
-        self.write_char('\n');
         Ok(())
     }
 }

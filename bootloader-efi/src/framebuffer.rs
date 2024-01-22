@@ -1,8 +1,6 @@
 use core::slice;
 
-use alloc::{string::String, format, fmt::format};
 use bitflags::bitflags;
-use log::{warn, info};
 use uefi::{table::{SystemTable, Boot, boot::SearchType}, proto::console::gop::{GraphicsOutput, PixelFormat}, Identify};
 
 use crate::device::qemu::{exit_qemu, QemuExitCode};
@@ -37,7 +35,7 @@ impl Framebuffer {
     }
 }
 
-pub fn locate_framebuffer(system_table: &SystemTable<Boot>) -> Result<Framebuffer, String> {
+pub fn locate_framebuffer(system_table: &SystemTable<Boot>) -> Option<Framebuffer> {
     let boot_services = system_table.boot_services();
 
     let graphics_output_handle_buffer = match boot_services
@@ -45,21 +43,21 @@ pub fn locate_framebuffer(system_table: &SystemTable<Boot>) -> Result<Framebuffe
     {
         Ok(handle_buffer) => handle_buffer,
         Err(e) => {
-            return Err(format!("failed to locate handle buffer of protocol GraphicsOutput: {:?}", e))
+            return None
         }
     };
 
     let graphics_output_handle = match graphics_output_handle_buffer.first() {
         Some(handle) => *handle,
         None => {
-            return Err(format!("{}", "failed to get handle of buffer of protocol GraphicsOutput"));
+            return None;
         },
     };
 
     let mut protocol = match boot_services.open_protocol_exclusive::<GraphicsOutput>(graphics_output_handle) {
         Ok(p) => p,
         Err(e) => {
-            return Err(format!("failed to open protocol GraphicsOutput of handle {:?}: {}", graphics_output_handle, e))
+            return None
         }
     };
 
@@ -83,7 +81,7 @@ pub fn locate_framebuffer(system_table: &SystemTable<Boot>) -> Result<Framebuffe
     let current_info = protocol.current_mode_info();
     let mut framebuffer = protocol.frame_buffer();
 
-    Ok(Framebuffer::new(
+    Some(Framebuffer::new(
         framebuffer.as_mut_ptr(), 
         framebuffer.size(), 
         current_info.resolution().0, 
@@ -92,9 +90,7 @@ pub fn locate_framebuffer(system_table: &SystemTable<Boot>) -> Result<Framebuffe
         match current_info.pixel_format() {
             PixelFormat::Rgb => FBPixelFormat::RGB,
             PixelFormat::Bgr => FBPixelFormat::BGR,
-            others => {
-                return Err(format!("pixel format of current framebuffer is not supported: {:?}", others))
-            }
+            others => return None
         }
     ))
 }

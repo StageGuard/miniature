@@ -1,17 +1,15 @@
-use core::ops::Deref;
+use core::{ops::Deref, mem::MaybeUninit};
 
-use alloc::{vec::Vec, string::ToString};
 use log::{warn, info};
 use uefi::{proto::{Protocol, media::{fs::SimpleFileSystem, file::{FileMode, FileAttribute, File}}, device_path::DevicePath, loaded_image::{self, LoadedImage}}, table::boot::{BootServices, ScopedProtocol, LoadImageSource, OpenProtocolParams}, cstr16};
-use uefi_services::system_table;
 
-use crate::{device::retrieve::ProtocolWithHandle, print_panic::PrintPanic};
+use crate::{device::retrieve::ProtocolWithHandle, panic::PrintPanic};
 
 use super::retrieve::get_device_path_str;
 
 pub fn find_current_boot_partition<'a, T : Protocol>(
     boot_services: &'a BootServices,
-    partitions: &'a Vec<ProtocolWithHandle<T>>
+    partitions: &'a [MaybeUninit<ProtocolWithHandle<T>>]
 ) -> Option<&'a ProtocolWithHandle<'a, T>> {
     let current_image = boot_services.open_protocol_exclusive::<LoadedImage>(boot_services.image_handle());
     if current_image.is_err() {
@@ -30,8 +28,11 @@ pub fn find_current_boot_partition<'a, T : Protocol>(
     };
 
     for part in partitions {
-        if part.device_path_string.to_string() == current_image_device_path.to_string() {
-            return Some(part)
+        let part = unsafe { part.as_ptr() };
+        unsafe {
+            if (*part).device_path_string.as_bytes() == current_image_device_path.as_bytes() {
+                return Some(&*part)
+            }
         }
     }
 
