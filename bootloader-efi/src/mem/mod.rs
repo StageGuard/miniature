@@ -5,6 +5,8 @@ use x86_64::PhysAddr;
 pub mod page_allocator;
 pub mod frame_allocator;
 pub mod memory_descriptor;
+pub mod runtime_map;
+pub mod tracked_mapper;
 
 pub struct MemoryRegion {
     /// The physical start address of the region.

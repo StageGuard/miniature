@@ -17,7 +17,9 @@ use core::mem::MaybeUninit;
 
 extern crate alloc;
 
-use log::{info, warn, debug};
+use alloc::string::String;
+use alloc::vec::Vec;
+use log::{info, warn, debug, error};
 use uefi::proto::device_path::text::{
     AllowShortcuts, DevicePathToText, DisplayOnly,
 };
@@ -34,9 +36,10 @@ use crate::device::retrieve::{list_handles, ProtocolWithHandle};
 use crate::acpi::find_acpi_table_pointer;
 use crate::fs::{open_sfs, load_file_sfs};
 use crate::global_alloc::switch_to_runtime_global_allocator;
+use crate::kernel::load_kernel_to_virt_mem;
 use crate::mem::RTMemoryRegion;
 use crate::mem::frame_allocator::RTFrameAllocator;
-use crate::mem::page_allocator::runtime;
+use crate::mem::page_allocator;
 use crate::panic::PrintPanic;
 use crate::framebuffer::{locate_framebuffer, Framebuffer};
 use crate::logger::{init_framebuffer_logger, init_uefi_services_logger};
@@ -84,8 +87,14 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         .or_panic("cannot open volumn of efi image filesystem");
 
 
-    let kernel = load_file_sfs(&system_table, &mut fs, "kernel-x86_64");
-    info!("kernel size: {}", kernel.unwrap().len());
+    let kernel = match load_file_sfs(&system_table, &mut fs, "kernel-x86_64") {
+        Some(kernel_slice) => kernel_slice,
+        None => {
+            error!("kernel is not found in current loaded image!");
+            halt();
+        }
+    };
+    info!("loaded kernel to physics address: 0x{:x}", &kernel[0] as *const _ as usize);
 
     debug!("exiting boot services");
     let (system_table, mut memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA);
@@ -101,12 +110,23 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
 
     let mut frame_allocator = RTFrameAllocator::new(memory_map.entries());
 
-    let bootloader_page_table = runtime::map_boot_stage_page_table(&mut frame_allocator);
-    let kernel_page_table = runtime::create_page_table(&mut frame_allocator, VirtAddr::new(0));
+    // 使用 RTFrameAllocator 在 runtime memory map 新的 PML4 页表，写到 CR3.
+    // 现在 CR3 寄存器是这个 bootloader_page_table 了，但是前面的一些引用，例如 kernel，framebuffer 依然是有效的。
+    // 因为我们把旧 PML4 页表的 PTE 写入到了我们的新表，并正确设置了内存偏移（UEFI 直接映射物理内存，所以它的物理内存和虚拟内存之间没有偏移）
+    // 为什么需要复制一份 boot 阶段的 PML4？
+    // * 新的 RTFrameAllocator 没有之前的物理页帧分配信息，可能会覆写之前 CR3 指向的 PML4 的物理页帧，而我们新分配的 PML4 表是
+    //   由 RTFrameAllocator 分配的物理页帧，不会被覆盖。
+    // * 可以继续使用之前的指针，例如 kernel 和 framebuffer，稍后也要将这些内存建立和当前页表的映射防止被覆写。
+    let bootloader_page_table = page_allocator::runtime::map_boot_stage_page_table(&mut frame_allocator);
+    let mut kernel_page_table = page_allocator::runtime::create_page_table(&mut frame_allocator, VirtAddr::new(0));
 
-    info!("efi reaches program end, halt cpu");
+
+    // 加载内核到内核的 PML4 页表里
+    // kernel 在物理内存的地址位置，这个物理地址实际上是由 boot 阶段的 BootServices.allocate_pages 分配的
+    let load_kernel_result = load_kernel_to_virt_mem(kernel, &mut kernel_page_table, &mut frame_allocator);
+
+    info!("efi program reaches end, halt cpu.");
     halt();
-    Status::SUCCESS
 }
 
 fn halt() -> ! {

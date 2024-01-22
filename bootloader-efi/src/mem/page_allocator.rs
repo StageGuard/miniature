@@ -47,13 +47,13 @@ pub mod runtime {
     use core::{arch::asm, ops::Add};
 
     use log::info;
-    use x86_64::{structures::paging::{PageTable, FrameAllocator, OffsetPageTable, Size4KiB}, VirtAddr, registers::control::{Cr3, Cr3Flags, Cr0}};
+    use x86_64::{structures::paging::{PageTable, FrameAllocator, OffsetPageTable, Size4KiB, page_table::PageTableLevel, PageTableIndex}, VirtAddr, registers::control::{Cr3, Cr3Flags, Cr0}};
 
-    use crate::{mem::frame_allocator::RTFrameAllocator, panic::PrintPanic, device::qemu::exit_qemu, halt};
+    use crate::{mem::{frame_allocator::RTFrameAllocator, tracked_mapper::TrackedMapper}, panic::PrintPanic, device::qemu::exit_qemu, halt};
 
 
     /// map current level4 page table (boot stage) to runtime stage page table
-    pub fn map_boot_stage_page_table(allocator: &mut impl FrameAllocator<Size4KiB>) -> OffsetPageTable<'static> {
+    pub fn map_boot_stage_page_table(allocator: &mut impl FrameAllocator<Size4KiB>) -> TrackedMapper<OffsetPageTable<'static>> {
         // UEFI identity-maps all memory, so the offset between physical and virtual addresses is 0
         let phys_offset = VirtAddr::new(0);
 
@@ -74,12 +74,18 @@ pub mod runtime {
 
         unsafe {
             Cr3::write(frame, Cr3Flags::empty());
-            OffsetPageTable::new(&mut *new_page_table, phys_offset)
+
+            let mut tracked_page_table = TrackedMapper::new(
+                OffsetPageTable::new(&mut *new_page_table, phys_offset),
+                PageTableLevel::Four
+            );
+            tracked_page_table.mark_as_used(0);
+            tracked_page_table
         }
     }
 
     // create new page table
-    pub fn create_page_table(allocator: &mut impl FrameAllocator<Size4KiB>, phys_offset: VirtAddr) -> OffsetPageTable<'static> {
+    pub fn create_page_table(allocator: &mut impl FrameAllocator<Size4KiB>, phys_offset: VirtAddr) -> TrackedMapper<OffsetPageTable<'static>> {
         let frame = allocator.allocate_frame().or_panic("failed to allocate new physics frame");
 
         let page_table: *mut PageTable = unsafe {
@@ -89,6 +95,8 @@ pub mod runtime {
             &mut *ptr
         };
 
-        unsafe { OffsetPageTable::new(&mut *page_table, phys_offset) }
+        unsafe { 
+            TrackedMapper::new(OffsetPageTable::new(&mut *page_table, phys_offset), PageTableLevel::Four)
+        }
     }
 }
