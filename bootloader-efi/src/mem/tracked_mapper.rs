@@ -1,7 +1,7 @@
-use core::{ops::{Index, Range}, usize};
+use core::{ops::{Index, Range, DerefMut, Deref}, usize};
 
 use alloc::rc::Rc;
-use log::warn;
+use log::{info, warn};
 use spin::MutexGuard;
 use x86_64::{structures::paging::{PageTable, page_table::{PageTableEntry, PageTableLevel}, PageTableIndex, mapper::{MapperAllSizes, CleanUp}, Translate, Mapper, Size4KiB, Page}, VirtAddr};
 
@@ -54,14 +54,14 @@ where
 
             self.first_available_index = curr;
         } else if self.last_available_index == index {
-            // 最后一个可用 pTE 索引被标记使用，则寻找上一个可用作为最后一个可用
+            // 最后一个可用 PTE 索引被标记使用，则寻找上一个可用作为最后一个可用
             // 此时 curr index 及后面的都已经使用
             let mut curr = self.last_available_index;
-            while curr > 0 && self.used[curr] { 
+            while curr > 0 && self.used[curr] {
                 curr -= 1;
             }
 
-            self.last_available_index -= curr;
+            self.last_available_index = curr;
         }
 
         Some(PageTableIndex::new(index as u16))
@@ -133,12 +133,12 @@ where
             return None
         }
 
+        let mut curr_idx = if reverse { self.last_available_index } else { self.first_available_index };
+
         // fast path
         if required_pte_size == 1 {
-            return self.mark_as_used(self.first_available_index).map(|pte| (pte, 1))
+            return self.mark_as_used(curr_idx).map(|pte| (pte, 1))
         }
-
-        let mut curr_idx = if reverse { self.last_available_index } else { self.first_available_index };
 
         let len = required_pte_size;
         while (required_pte_size..(PTE_COUNT_PER_PT-required_pte_size-1)).contains(&curr_idx) {
@@ -168,5 +168,25 @@ where
         }
 
         return None
+    }
+}
+
+impl<PT> Deref for TrackedMapper<PT>
+where 
+    PT : Mapper<Size4KiB> + Translate 
+{
+    type Target = PT;
+
+    fn deref(&self) -> &Self::Target {
+        &self.inner
+    }
+}
+
+impl<PT> DerefMut for TrackedMapper<PT>
+where 
+    PT : Mapper<Size4KiB> + Translate 
+{
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        return &mut self.inner;
     }
 }

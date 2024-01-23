@@ -1,5 +1,6 @@
 #![no_std]
 #![no_main]
+#![feature(step_trait)]
 
 mod panic;
 mod acpi;
@@ -11,25 +12,20 @@ mod sync;
 mod mem;
 mod global_alloc;
 mod device;
+mod context;
 
 use core::arch::asm;
 use core::mem::MaybeUninit;
 
 extern crate alloc;
 
-use alloc::string::String;
-use alloc::vec::Vec;
+use alloc::slice;
 use log::{info, warn, debug, error};
-use uefi::proto::device_path::text::{
-    AllowShortcuts, DevicePathToText, DisplayOnly,
-};
-use uefi::proto::loaded_image::LoadedImage;
 use uefi::proto::media::partition::PartitionInfo;
 use uefi::table::{SystemTable, Boot};
-use uefi::table::boot::{SearchType, MemoryType, BootServices};
-use uefi::{Identify, Result, entry, Handle, Status, allocator};
+use uefi::table::boot::MemoryType;
+use uefi::{entry, Handle, Status, allocator};
 use x86_64::VirtAddr;
-use x86_64::structures::paging::FrameAllocator;
 use crate::device::partition::find_current_boot_partition;
 use crate::device::qemu::exit_qemu;
 use crate::device::retrieve::{list_handles, ProtocolWithHandle};
@@ -37,9 +33,9 @@ use crate::acpi::find_acpi_table_pointer;
 use crate::fs::{open_sfs, load_file_sfs};
 use crate::global_alloc::switch_to_runtime_global_allocator;
 use crate::kernel::load_kernel_to_virt_mem;
-use crate::mem::RTMemoryRegion;
 use crate::mem::frame_allocator::RTFrameAllocator;
 use crate::mem::page_allocator;
+use crate::mem::runtime_map::{alloc_and_map_gdt, alloc_and_map_kernel_stack, map_framebuffer};
 use crate::panic::PrintPanic;
 use crate::framebuffer::{locate_framebuffer, Framebuffer};
 use crate::logger::{init_framebuffer_logger, init_uefi_services_logger};
@@ -121,9 +117,29 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     let mut kernel_page_table = page_allocator::runtime::create_page_table(&mut frame_allocator, VirtAddr::new(0));
 
 
-    // 加载内核到内核的 PML4 页表里
+    // 加载内核到内核的 PML4 页表里，加载到四级页表的最后一个表项的起始，0xffff_ff80_0000_0000
     // kernel 在物理内存的地址位置，这个物理地址实际上是由 boot 阶段的 BootServices.allocate_pages 分配的
-    let load_kernel_result = load_kernel_to_virt_mem(kernel, &mut kernel_page_table, &mut frame_allocator);
+    let load_kernel = load_kernel_to_virt_mem(kernel, &mut kernel_page_table, &mut frame_allocator);
+    info!("kernel entry virt addr: 0x{:x}", load_kernel.kernel_entry.as_u64());
+
+    // 创建内核栈并加载到内核 PML4 页表
+    let kernel_stack_virt_addr = alloc_and_map_kernel_stack(4096 * 128, &mut kernel_page_table, &mut frame_allocator);
+    info!("kernel stack virt addr: 0x{:x}", kernel_stack_virt_addr.as_u64());
+
+    // map gdt
+    let kernel_gdt = alloc_and_map_gdt(&mut kernel_page_table, &mut frame_allocator);
+    info!("global descriptor virt addr: 0x{:x}", kernel_gdt);
+
+    // map framebuffer to kernel virt addr
+    if let Some(framebuffer) = framebuffer {
+        let framebuffer_virt_addr: VirtAddr = map_framebuffer(
+            unsafe { slice::from_raw_parts(framebuffer.ptr, framebuffer.len) }, 
+            &mut kernel_page_table,
+            &mut frame_allocator
+        );
+
+        info!("kernel framebuffer virt addr: 0x{:x}", framebuffer_virt_addr.as_u64());
+    }
 
     info!("efi program reaches end, halt cpu.");
     halt();
