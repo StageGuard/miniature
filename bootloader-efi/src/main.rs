@@ -25,7 +25,10 @@ use uefi::proto::media::partition::PartitionInfo;
 use uefi::table::{SystemTable, Boot};
 use uefi::table::boot::MemoryType;
 use uefi::{entry, Handle, Status, allocator};
+use x86_64::registers::control::{Cr0, Cr0Flags};
+use x86_64::registers::model_specific::{Efer, EferFlags};
 use x86_64::VirtAddr;
+use crate::context::{context_switch, KernelArg};
 use crate::device::partition::find_current_boot_partition;
 use crate::device::qemu::exit_qemu;
 use crate::device::retrieve::{list_handles, ProtocolWithHandle};
@@ -35,7 +38,7 @@ use crate::global_alloc::switch_to_runtime_global_allocator;
 use crate::kernel::load_kernel_to_virt_mem;
 use crate::mem::frame_allocator::RTFrameAllocator;
 use crate::mem::page_allocator;
-use crate::mem::runtime_map::{alloc_and_map_gdt, alloc_and_map_kernel_stack, map_framebuffer};
+use crate::mem::runtime_map::{alloc_and_map_gdt, alloc_and_map_kernel_stack, map_framebuffer, map_kernel_arg, map_physics_memory};
 use crate::panic::PrintPanic;
 use crate::framebuffer::{locate_framebuffer, Framebuffer};
 use crate::logger::{init_framebuffer_logger, init_uefi_services_logger};
@@ -114,35 +117,88 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     //   由 RTFrameAllocator 分配的物理页帧，不会被覆盖。
     // * 可以继续使用之前的指针，例如 kernel 和 framebuffer，稍后也要将这些内存建立和当前页表的映射防止被覆写。
     let bootloader_page_table = page_allocator::runtime::map_boot_stage_page_table(&mut frame_allocator);
-    let mut kernel_page_table = page_allocator::runtime::create_page_table(&mut frame_allocator, VirtAddr::new(0));
+    let (mut kernel_page_table, kernel_pml4_phys_addr) = 
+        page_allocator::runtime::create_page_table(&mut frame_allocator, VirtAddr::new(0));
 
+    unsafe {
+        // Enable support for the no-execute bit in page tables.
+        Efer::update(|efer| *efer |= EferFlags::NO_EXECUTE_ENABLE);
+        // Make the kernel respect the write-protection bits even when in ring 0 by default
+        Cr0::update(|cr0| *cr0 |= Cr0Flags::WRITE_PROTECT);
+    };
 
     // 加载内核到内核的 PML4 页表里，加载到四级页表的最后一个表项的起始，0xffff_ff80_0000_0000
     // kernel 在物理内存的地址位置，这个物理地址实际上是由 boot 阶段的 BootServices.allocate_pages 分配的
     let load_kernel = load_kernel_to_virt_mem(kernel, &mut kernel_page_table, &mut frame_allocator);
     info!("kernel entry virt addr: 0x{:x}", load_kernel.kernel_entry.as_u64());
 
-    // 创建内核栈并加载到内核 PML4 页表
-    let kernel_stack_virt_addr = alloc_and_map_kernel_stack(4096 * 128, &mut kernel_page_table, &mut frame_allocator);
-    info!("kernel stack virt addr: 0x{:x}", kernel_stack_virt_addr.as_u64());
-
     // map gdt
     let kernel_gdt = alloc_and_map_gdt(&mut kernel_page_table, &mut frame_allocator);
     info!("global descriptor virt addr: 0x{:x}", kernel_gdt);
 
+    // 创建内核栈并加载到内核 PML4 页表
+    let kernel_stack_size = 4096 * 128; // 128 KiB
+    let kernel_stack_virt_addr = alloc_and_map_kernel_stack(kernel_stack_size, &mut kernel_page_table, &mut frame_allocator);
+    info!("kernel stack virt addr: 0x{:x}", kernel_stack_virt_addr.as_u64());
+    let kernel_stack_top_virt_addr = (kernel_stack_virt_addr + kernel_stack_size).align_down(16u8).as_u64();
+
     // map framebuffer to kernel virt addr
-    if let Some(framebuffer) = framebuffer {
+    let framebuffer_virt_addr = framebuffer.map(|f| {
         let framebuffer_virt_addr: VirtAddr = map_framebuffer(
-            unsafe { slice::from_raw_parts(framebuffer.ptr, framebuffer.len) }, 
+            unsafe { slice::from_raw_parts(f.ptr, f.len) }, 
             &mut kernel_page_table,
             &mut frame_allocator
         );
 
         info!("kernel framebuffer virt addr: 0x{:x}", framebuffer_virt_addr.as_u64());
-    }
+        framebuffer_virt_addr
+    });
 
-    info!("efi program reaches end, halt cpu.");
-    halt();
+
+
+    // 映射帧分配器可用的地址空间（也就是物理内存地址空间）到内核页表
+    let mapped_phys_space_virt_addr = map_physics_memory(
+        frame_allocator.max_phys_addr(), 
+        &mut kernel_page_table, 
+        &mut frame_allocator
+    );
+    info!("kernel mapped all physics address space to virt addr: 0x{:x}", mapped_phys_space_virt_addr);
+
+    // 创建内核参数，把这些参数传给内核来让内核读取一些信息    
+    let kernel_arg = KernelArg {
+        kernel_virt_space_offset:   load_kernel.kernel_virt_space_offset,
+
+        kernel_start_addr:          kernel_stack_virt_addr.as_u64(),
+
+        gdt_start_addr:             kernel_gdt.as_u64(),
+
+        stack_top_addr:             (kernel_stack_virt_addr + kernel_stack_size).align_down(16u8).as_u64(),
+        stack_size:                 kernel_stack_size,
+
+        framebuffer_addr:           framebuffer_virt_addr.unwrap_or(VirtAddr::new(0)).as_u64(),
+        framebuffer_len:            framebuffer.map(|f| f.len).unwrap_or(0),
+        framebuffer_width:          framebuffer.map(|f| f.width).unwrap_or(0),
+        framebuffer_height:         framebuffer.map(|f| f.height).unwrap_or(0),
+        framebuffer_stride:         framebuffer.map(|f| f.stride).unwrap_or(0),
+
+        phys_mem_mapped_addr:       mapped_phys_space_virt_addr.as_u64(),
+        phys_mem_size:              frame_allocator.max_phys_addr().as_u64(),
+
+        tls_template:               load_kernel.tls_template.unwrap_or_default()
+    };
+    let kernel_arg_virt_addr = map_kernel_arg(kernel_arg, &mut kernel_page_table, &mut frame_allocator);
+
+    info!("switching to kernel, args: {:#?}", kernel_arg);
+    unsafe {
+        // 在 switch 的过程中就已经写入了内核 PML4 表
+        context_switch(
+            // 当前阶段还是无偏移映射，物理地址和虚拟地址无偏移并且是均等映射
+            kernel_pml4_phys_addr.as_u64(), 
+            kernel_stack_top_virt_addr,
+            load_kernel.kernel_entry.as_u64(),
+            kernel_arg_virt_addr.as_u64()
+        )
+    }
 }
 
 fn halt() -> ! {

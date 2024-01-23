@@ -46,7 +46,7 @@ pub mod boot {
 pub mod runtime {
     use core::ops::Add;
 
-    use x86_64::{structures::paging::{PageTable, FrameAllocator, OffsetPageTable, Size4KiB, page_table::PageTableLevel}, VirtAddr, registers::control::{Cr3, Cr3Flags}};
+    use x86_64::{registers::control::{Cr3, Cr3Flags}, structures::paging::{PageTable, FrameAllocator, OffsetPageTable, Size4KiB, page_table::PageTableLevel}, PhysAddr, VirtAddr};
 
     use crate::{mem::tracked_mapper::TrackedMapper, panic::PrintPanic};
 
@@ -84,7 +84,7 @@ pub mod runtime {
     }
 
     // create new page table
-    pub fn create_page_table(allocator: &mut impl FrameAllocator<Size4KiB>, phys_offset: VirtAddr) -> TrackedMapper<OffsetPageTable<'static>> {
+    pub fn create_page_table(allocator: &mut impl FrameAllocator<Size4KiB>, phys_offset: VirtAddr) -> (TrackedMapper<OffsetPageTable<'static>>, PhysAddr) {
         let frame = allocator.allocate_frame().or_panic("failed to allocate new physics frame");
 
         let page_table: *mut PageTable = unsafe {
@@ -95,7 +95,7 @@ pub mod runtime {
         };
 
         unsafe { 
-            TrackedMapper::new(OffsetPageTable::new(&mut *page_table, phys_offset), PageTableLevel::Four)
+            (TrackedMapper::new(OffsetPageTable::new(&mut *page_table, phys_offset), PageTableLevel::Four), frame.start_address())
         }
     }
 }

@@ -15,8 +15,10 @@ pub struct LoadKernel {
     pub tls_template: Option<TlsTemplate>,
 }
 
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
 pub struct TlsTemplate {
-    pub start_virt_addr: VirtAddr,
+    pub start_virt_addr: u64,
     pub mem_size: usize,
     pub file_size: usize
 }
@@ -289,7 +291,7 @@ pub fn load_kernel_to_virt_mem(
             }
             ShType::Tls => {
                 tls_template.replace(TlsTemplate {
-                    start_virt_addr: seg_start_virt_addr,
+                    start_virt_addr: seg_start_virt_addr.as_u64(),
                     mem_size: ph.mem_size() as usize,
                     file_size: ph.file_size() as usize
                 });
