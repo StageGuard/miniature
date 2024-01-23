@@ -44,12 +44,11 @@ pub mod boot {
 }
 
 pub mod runtime {
-    use core::{arch::asm, ops::Add};
+    use core::ops::Add;
 
-    use log::info;
-    use x86_64::{structures::paging::{PageTable, FrameAllocator, OffsetPageTable, Size4KiB, page_table::PageTableLevel, PageTableIndex}, VirtAddr, registers::control::{Cr3, Cr3Flags, Cr0}};
+    use x86_64::{structures::paging::{PageTable, FrameAllocator, OffsetPageTable, Size4KiB, page_table::PageTableLevel}, VirtAddr, registers::control::{Cr3, Cr3Flags}};
 
-    use crate::{mem::{frame_allocator::RTFrameAllocator, tracked_mapper::TrackedMapper}, panic::PrintPanic, device::qemu::exit_qemu, halt};
+    use crate::{mem::tracked_mapper::TrackedMapper, panic::PrintPanic};
 
 
     /// map current level4 page table (boot stage) to runtime stage page table

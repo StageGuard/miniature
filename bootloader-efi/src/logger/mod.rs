@@ -36,7 +36,7 @@ impl log::Log for FramebufferLogger<'_> {
     fn log(&self, record: &log::Record) {
         let mut fb_writter = self.writter.lock();
         
-        writeln!(fb_writter, "{:5}: {}", record.level(), record.args());
+        let _ = writeln!(fb_writter, "{:5}: {}", record.level(), record.args());
     }
 
     fn flush(&self) {
@@ -63,7 +63,7 @@ pub fn init_uefi_services_logger(system_table: &mut SystemTable<Boot>) {
     let uefi_logger = uefi::logger::Logger::new();
     unsafe { uefi_logger.set_output(system_table.stdout()); };
 
-    log::set_logger(unsafe { &*(&uefi_logger as *const _) });
+    let _ = log::set_logger(unsafe { &*(&uefi_logger as *const _) });
     log::set_max_level(log::LevelFilter::Debug);
 
     logger.write(uefi_logger);

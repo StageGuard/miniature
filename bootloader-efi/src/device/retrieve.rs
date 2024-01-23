@@ -1,14 +1,10 @@
 use core::mem::MaybeUninit;
 
-use log::{info, warn};
+use log::warn;
 use uefi::proto::Protocol;
-use uefi::proto::device_path::media::RamDisk;
 use uefi::{Identify, Handle};
 use uefi::proto::device_path::DevicePath;
 use uefi::proto::device_path::text::{DevicePathToText, DisplayOnly, AllowShortcuts, PoolString};
-use uefi::proto::media::block::BlockIO;
-use uefi::proto::media::partition::PartitionInfo;
-use uefi::table::{Boot, SystemTable};
 use uefi::table::boot::{SearchType, BootServices, ScopedProtocol};
 use crate::panic::PrintPanic;
 

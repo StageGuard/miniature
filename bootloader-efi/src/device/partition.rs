@@ -1,7 +1,7 @@
-use core::{ops::Deref, mem::MaybeUninit};
+use core::mem::MaybeUninit;
 
-use log::{warn, info};
-use uefi::{proto::{Protocol, media::{fs::SimpleFileSystem, file::{FileMode, FileAttribute, File}}, device_path::DevicePath, loaded_image::{self, LoadedImage}}, table::boot::{BootServices, ScopedProtocol, LoadImageSource, OpenProtocolParams}, cstr16};
+use log::warn;
+use uefi::{proto::{Protocol, device_path::DevicePath, loaded_image::LoadedImage}, table::boot::BootServices};
 
 use crate::{device::retrieve::ProtocolWithHandle, panic::PrintPanic};
 
@@ -20,7 +20,7 @@ pub fn find_current_boot_partition<'a, T : Protocol>(
     let current_image = current_image.unwrap();
     let current_image_device = current_image.device().or_panic("failed to get device handle of current loaded image");
 
-    let current_image_device_path = unsafe {
+    let current_image_device_path = {
         let protocol = boot_services
             .open_protocol_exclusive::<DevicePath>(current_image_device)
             .or_panic("failed to open protocol DevicePath of device of current loaded image");
@@ -28,7 +28,7 @@ pub fn find_current_boot_partition<'a, T : Protocol>(
     };
 
     for part in partitions {
-        let part = unsafe { part.as_ptr() };
+        let part = part.as_ptr();
         unsafe {
             if (*part).device_path_string.as_bytes() == current_image_device_path.as_bytes() {
                 return Some(&*part)

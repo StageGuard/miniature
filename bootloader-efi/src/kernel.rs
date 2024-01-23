@@ -6,8 +6,6 @@ use core::{cmp, iter::Step, mem::size_of, ptr};
 
 use crate::{mem::tracked_mapper::TrackedMapper, panic::PrintPanic};
 
-static ZEREO_PHYS_FRAME: [u8; 512] = [0u8; 512];
-
 pub struct LoadKernel {
     // kernel 实际虚拟地址入口
     pub kernel_entry: VirtAddr,
@@ -38,7 +36,8 @@ pub fn load_kernel_to_virt_mem(
         program::sanity_check(program_header, &kernel_elf)
             .or_panic("kernel progran sanity check failed");
     }
-    header::sanity_check(&kernel_elf);
+    header::sanity_check(&kernel_elf)
+        .or_panic("kernel header sanity check failed");
 
     // get kernel virtual address offset
     let kernel_type = kernel_elf.header.pt2.type_().as_type();

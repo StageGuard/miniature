@@ -1,6 +1,6 @@
-use core::{slice, mem::size_of, fmt};
+use core::{slice, fmt};
 
-use crate::{framebuffer::{Framebuffer, FBPixelFormat}, panic::PrintPanic, device::qemu::exit_qemu};
+use crate::{framebuffer::{Framebuffer, FBPixelFormat}, panic::PrintPanic};
 use noto_sans_mono_bitmap::{
     get_raster, get_raster_width, FontWeight, RasterHeight, RasterizedChar,
 };

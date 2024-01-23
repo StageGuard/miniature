@@ -1,10 +1,9 @@
-use core::{alloc::GlobalAlloc, mem::size_of};
+use core::alloc::GlobalAlloc;
 
 use buddy_alloc::{NonThreadsafeAlloc, FastAllocParam, BuddyAllocParam};
 use lazy_static::lazy_static;
-use log::info;
 use spin::mutex::Mutex;
-use crate::{mem::RTMemoryRegion, sync::upsafe_cell::UPSafeCell};
+use crate::sync::upsafe_cell::UPSafeCell;
 
 const RT_HEAP_SIZE: usize = 0x10_8000;
 static mut RT_HEAP_SPACE: [u8; RT_HEAP_SIZE] = [0; RT_HEAP_SIZE];

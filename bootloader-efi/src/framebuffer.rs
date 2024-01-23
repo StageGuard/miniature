@@ -3,7 +3,7 @@ use core::slice;
 use bitflags::bitflags;
 use uefi::{table::{SystemTable, Boot, boot::SearchType}, proto::console::gop::{GraphicsOutput, PixelFormat}, Identify};
 
-use crate::device::qemu::{exit_qemu, QemuExitCode};
+use crate::panic::PrintPanic;
 
 
 #[derive(Copy, Clone, Debug)]
@@ -75,7 +75,8 @@ pub fn locate_framebuffer(system_table: &SystemTable<Boot>) -> Option<Framebuffe
         });
         
     if let Some(mode) = largest_resolution_mode {
-        protocol.set_mode(&mode);
+        protocol.set_mode(&mode)
+            .or_panic("failed to set graphics output mode");
     }
 
     let current_info = protocol.current_mode_info();

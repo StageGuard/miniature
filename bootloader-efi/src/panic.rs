@@ -1,8 +1,6 @@
 use core::{fmt, sync::atomic::AtomicPtr, ffi::c_void, ptr, panic::PanicInfo, arch::asm};
 use lazy_static::lazy_static;
-use log::{info, error, log};
-
-use crate::device::qemu::exit_qemu;
+use log::{info, error};
 
 lazy_static! {
     static ref SYSTEM_TABLE_BOOT: AtomicPtr<c_void> = AtomicPtr::new(ptr::null_mut());

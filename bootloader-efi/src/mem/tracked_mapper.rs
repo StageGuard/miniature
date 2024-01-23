@@ -1,9 +1,5 @@
-use core::{ops::{Index, Range, DerefMut, Deref}, usize};
-
-use alloc::rc::Rc;
-use log::{info, warn};
-use spin::MutexGuard;
-use x86_64::{structures::paging::{PageTable, page_table::{PageTableEntry, PageTableLevel}, PageTableIndex, mapper::{MapperAllSizes, CleanUp}, Translate, Mapper, Size4KiB, Page}, VirtAddr};
+use core::{ops::{Range, DerefMut, Deref}, usize};
+use x86_64::{structures::paging::{page_table::PageTableLevel, PageTableIndex, Translate, Mapper, Size4KiB, Page}, VirtAddr};
 
 const PTE_COUNT_PER_PT: usize = 512;
 
@@ -35,7 +31,7 @@ where
     /// 标记此 PTE 已被使用，会更新内部索引优化
     /// 标记失败返回 None
     pub fn mark_as_used(&mut self, index: usize) -> Option<PageTableIndex> {
-        if index < 0 || index > 512 {
+        if index > 512 {
             return None
         }
 
@@ -70,7 +66,7 @@ where
     // 标记此 PTE 未被使用，会更新内部索引优化
     // 不会返回任何
     pub fn mark_as_unused(&mut self, index: usize) {
-        if index < 0 || index > 512 {
+        if index > 512 {
             return
         }
 

@@ -1,4 +1,3 @@
-use log::{info, debug};
 use uefi::table::boot::{MemoryDescriptor, MemoryMapIter};
 use x86_64::{
     structures::paging::{FrameAllocator, PhysFrame, Size4KiB},

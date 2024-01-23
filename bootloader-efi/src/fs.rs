@@ -3,7 +3,6 @@ use core::ops::Deref;
 use core::ptr;
 
 use core::slice;
-use log::info;
 use log::{warn, error};
 use crate::mem::page_allocator::boot::{paging_allocate, allocate_zeroed_page_aligned};
 use uefi::proto::device_path::DevicePath;
