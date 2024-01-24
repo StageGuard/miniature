@@ -164,6 +164,7 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         kernel_virt_space_offset:   load_kernel.kernel_virt_space_offset,
 
         gdt_start_addr:             kernel_gdt.as_u64(),
+        //acpi_table_start_addr:      
 
         stack_top_addr:             (kernel_stack_virt_addr + kernel_stack_size).align_down(16u8).as_u64(),
         stack_size:                 kernel_stack_size,

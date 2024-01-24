@@ -1,8 +1,28 @@
-use core::{arch::asm, mem::MaybeUninit};
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct MemoryRegion {
+    pub start: u64,
+    pub end: u64,
+    pub kind: MemoryRegionKind,
+}
 
-use x86_64::structures::paging::PhysFrame;
+#[repr(C)]
+#[non_exhaustive]
+#[derive(Debug, Copy, Clone, Eq, PartialEq)]
+pub enum MemoryRegionKind {
+    Usable,
+    Bootloader,
+    UnknownUefi(u32),
+    UnknownBios(u32),
+}
 
-use crate::{kernel::TlsTemplate, mem::MemoryRegion};
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Default)]
+pub struct TlsTemplate {
+    pub start_virt_addr: u64,
+    pub mem_size: usize,
+    pub file_size: usize
+}
 
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
@@ -33,32 +53,4 @@ pub struct KernelArg {
     pub unav_phys_mem_regions_len: usize,
 
     pub tls_template: TlsTemplate
-}
-
-/// # SAFETY
-/// we assumes all these address are valid
-///
-/// `stack_top`, `entry` and `arg` is at kernel pml4 page scope
-pub unsafe fn context_switch(
-    pml4_table: PhysFrame,
-    stack_top: u64,
-    entry: u64,
-    arg: u64
-) -> ! {
-    unsafe {
-        asm!(
-            r#"
-            xor rbp, rbp
-            mov cr3, {}
-            mov rsp, {}
-            push 0
-            jmp {}
-            "#,
-            in(reg) pml4_table.start_address().as_u64(),
-            in(reg) stack_top,
-            in(reg) entry,
-            in("rdi") arg as usize,
-        );
-    }
-    panic!("unreachable, context switched");
 }
