@@ -1,17 +1,17 @@
 use uefi::table::boot::{MemoryDescriptor, MemoryType};
 use x86_64::PhysAddr;
 
-use crate::mem::{RTMemoryRegion, MemoryRegionKind};
+use crate::mem::{RTMemoryRegionDescriptor, MemoryRegionKind};
 
-const PAGE_SIZE: usize = 4096;
+const PAGE_SIZE: u64 = 4096;
 
-impl RTMemoryRegion for MemoryDescriptor {
+impl RTMemoryRegionDescriptor for MemoryDescriptor {
     fn start(&self) -> PhysAddr {
         PhysAddr::new(self.phys_start)
     }
 
     fn len(&self) -> u64 {
-        self.page_count * PAGE_SIZE as u64
+        self.page_count * PAGE_SIZE 
     }
 
     fn kind(&self) -> MemoryRegionKind {
@@ -24,8 +24,6 @@ impl RTMemoryRegion for MemoryDescriptor {
     fn usable_after_bootloader_exit(&self) -> bool {
         match self.ty {
             MemoryType::CONVENTIONAL => true,
-            MemoryType::LOADER_CODE
-            | MemoryType::LOADER_DATA
             | MemoryType::BOOT_SERVICES_CODE
             | MemoryType::BOOT_SERVICES_DATA => {
                 // we don't need this data anymore after the bootloader

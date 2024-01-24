@@ -8,7 +8,10 @@ authors = ["StageGuard <beamiscool@qq.com>"]
 
 [dependencies]
 log = "0.4.20"
-x86_64 = "0.14.11"
+x86_64 = { version = "0.14.7", default-features = false, features = [
+    "instructions",
+    "inline_asm",
+] }
 
 [profile.dev]
 panic = "abort"

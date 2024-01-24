@@ -319,7 +319,6 @@ pub fn load_kernel_to_virt_mem(
         }
     }
 
-
     LoadKernel {
         kernel_entry: kernel_start_virt_addr + (kernel_elf.header.pt2.entry_point() - kernel_defined_start_virt_addr),
         kernel_virt_space_offset: i128::from(kernel_start_virt_addr.as_u64()) - i128::from(kernel_defined_start_virt_addr),
@@ -393,7 +392,7 @@ unsafe fn copy_pages_and_write(
         // Translate the virtual page to the physical frame.
         let phys_addr = unsafe { 
             copy_page_and_remap(page, pml4_table, frame_allocator)
-            .or_panic("failed to remap the page of the LOAD segnemt the addr points to")
+                .or_panic("failed to remap the page of the LOAD segnemt the addr points to")
          };
 
         // Figure out which address range we want to copy from the frame.

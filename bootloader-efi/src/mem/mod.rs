@@ -8,6 +8,8 @@ pub mod memory_descriptor;
 pub mod runtime_map;
 pub mod tracked_mapper;
 
+#[derive(Debug, Clone, Copy)]
+#[repr(C)]
 pub struct MemoryRegion {
     /// The physical start address of the region.
     pub start: u64,
@@ -69,7 +71,7 @@ pub enum MemoryRegionKind {
 }
 
 /// Abstraction trait for a memory region returned by the UEFI.
-pub trait RTMemoryRegion: Copy + core::fmt::Debug {
+pub trait RTMemoryRegionDescriptor: Copy + core::fmt::Debug {
     /// Returns the physical start address of the region.
     fn start(&self) -> PhysAddr;
     /// Returns the size of the region in bytes.

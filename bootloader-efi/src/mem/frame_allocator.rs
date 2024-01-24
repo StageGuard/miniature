@@ -1,28 +1,32 @@
-use uefi::table::boot::{MemoryDescriptor, MemoryMapIter};
 use x86_64::{
     structures::paging::{FrameAllocator, PhysFrame, Size4KiB},
     PhysAddr,
 };
 
-use super::{RTMemoryRegion, MemoryRegionKind};
+use super::{MemoryRegion, MemoryRegionKind, RTMemoryRegionDescriptor};
 
 
 
-/// A physical frame allocator based onUEFI provided memory map.
-pub struct RTFrameAllocator<'a> {
-    original: MemoryMapIter<'a>,
-    memory_map: MemoryMapIter<'a>,
-    current_descriptor: Option<MemoryDescriptor>,
+/// A physical frame allocator based on UEFI provided memory map.
+pub struct LinearIncFrameAllocator<I, D> {
+    original: I,
+    memory_map: I,
+    start_phys_addr: PhysAddr,
+    current_descriptor: Option<D>,
     next_frame: PhysFrame,
 }
 
-impl <'a> RTFrameAllocator<'a> {
+impl<I, D> LinearIncFrameAllocator<I, D>
+where
+    I: ExactSizeIterator<Item = D> + Clone,
+    I::Item: RTMemoryRegionDescriptor,
+{
     /// Creates a new frame allocator based on the given memory regions.
     ///
     /// Skips the frame at physical address zero to avoid potential problems. For example
     /// identity-mapping the frame at address zero is not valid in Rust, because Rust's `core`
     /// library assumes that references can never point to virtual address `0`.  
-    pub fn new(memory_map: MemoryMapIter<'a>) -> Self {
+    pub fn new(memory_map: I) -> Self {
         // skip frame 0 because the rust core library does not see 0 as a valid address
         let start_frame = PhysFrame::containing_address(PhysAddr::new(0x1000));
         Self::new_starting_at(start_frame, memory_map)
@@ -30,16 +34,17 @@ impl <'a> RTFrameAllocator<'a> {
 
     /// Creates a new frame allocator based on the given legacy memory regions. Skips any frames
     /// before the given `frame`.
-    pub fn new_starting_at(frame: PhysFrame, memory_map: MemoryMapIter<'a>) -> Self {
+    pub fn new_starting_at(frame: PhysFrame, memory_map: I) -> Self {
         Self {
             original: memory_map.clone(),
             memory_map,
+            start_phys_addr: frame.start_address(),
             current_descriptor: None,
             next_frame: frame,
         }
     }
 
-    fn allocate_frame_from_descriptor(&mut self, descriptor: MemoryDescriptor) -> Option<PhysFrame> {
+    fn allocate_frame_from_descriptor(&mut self, descriptor: D) -> Option<PhysFrame> {
         let start_addr = descriptor.start();
         let start_frame = PhysFrame::containing_address(start_addr);
         let end_addr = start_addr + descriptor.len();
@@ -82,9 +87,22 @@ impl <'a> RTFrameAllocator<'a> {
             .max()
             .unwrap()
     }
+
+    /// Returns memory range of all allocated physics memory
+    pub fn allocated_region(&self) -> MemoryRegion {
+        MemoryRegion {
+            start: self.start_phys_addr.as_u64(),
+            end: self.next_frame.start_address().as_u64(),
+            kind: MemoryRegionKind::Bootloader
+        }
+    }
 }
 
-unsafe impl FrameAllocator<Size4KiB> for RTFrameAllocator<'_> {
+unsafe impl<I, D> FrameAllocator<Size4KiB> for LinearIncFrameAllocator<I, D>
+where
+    I: ExactSizeIterator<Item = D> + Clone,
+    I::Item: RTMemoryRegionDescriptor,
+{
     fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
         if let Some(current_descriptor) = self.current_descriptor {
             match self.allocate_frame_from_descriptor(current_descriptor) {
@@ -99,8 +117,8 @@ unsafe impl FrameAllocator<Size4KiB> for RTFrameAllocator<'_> {
             if descriptor.kind() != MemoryRegionKind::Usable {
                 continue;
             }
-            if let Some(frame) = self.allocate_frame_from_descriptor(*descriptor) {
-                self.current_descriptor = Some(*descriptor);
+            if let Some(frame) = self.allocate_frame_from_descriptor(descriptor) {
+                self.current_descriptor = Some(descriptor);
                 return Some(frame);
             }
         }

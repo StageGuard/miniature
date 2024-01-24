@@ -1,3 +1,5 @@
+use core::{mem::size_of, slice};
+
 use log::info;
 use x86_64::{registers::segmentation::{Segment, CS, DS, ES, SS}, structures::{gdt::{Descriptor, GlobalDescriptorTable}, paging::{FrameAllocator, Mapper, OffsetPageTable, Page, PageTableIndex, PhysFrame, Size2MiB, Size4KiB}}, PhysAddr, VirtAddr};
 use x86_64::structures::paging::page_table::PageTableFlags as PTFlags;
@@ -36,8 +38,28 @@ pub fn alloc_and_map_kernel_stack(
     kernel_stack_start_page.start_address() + 4096u64
 }
 
+// create context switch function map indentically
+pub fn map_context_switch_identically(
+    context_switch: *const fn(),
+    kernel_pml4_table: &mut TrackedMapper<OffsetPageTable>,
+    frame_allocator: &mut impl FrameAllocator<Size4KiB>
+) -> VirtAddr {
+    let fn_phys_frame: PhysFrame<Size4KiB> = PhysFrame::containing_address(PhysAddr::new(context_switch as u64));
+    
+    for frame in PhysFrame::range_inclusive(fn_phys_frame, fn_phys_frame + 1) {
+        unsafe {
+            kernel_pml4_table
+                .identity_map(frame, PTFlags::PRESENT, frame_allocator)
+                .or_panic("failed to identity map kernel pml4 table.")
+                .flush();
+        }
+    }
+    
+    VirtAddr::new(context_switch as u64)
+}
+
 // create and map gdt
-pub fn alloc_and_map_gdt(
+pub fn alloc_and_map_gdt_identically(
     kernel_pml4_table: &mut TrackedMapper<OffsetPageTable>,
     frame_allocator: &mut impl FrameAllocator<Size4KiB>
 ) -> VirtAddr {
@@ -70,9 +92,8 @@ pub fn alloc_and_map_gdt(
             .map_to(gdt_identical_page, gdt_phys_frame, PTFlags::PRESENT, frame_allocator)
             .or_panic("failed to identity map new allocated global descriptor table.")
             .flush();
-
-        gdt_identical_page.start_address()
     }
+    gdt_identical_page.start_address()
 }
 
 pub fn map_framebuffer(
@@ -87,6 +108,7 @@ pub fn map_framebuffer(
     let framebuffer_start_page = Page::<Size4KiB>::containing_address(framebuffer_start_page_1gb.start_address());
     let framebuffer_phys_addr = PhysAddr::new(&framebuffer[0] as *const _ as u64);
 
+    // bootloader runtime 阶段物理内存和虚拟内存是恒等映射
     let framebuffer_start_phys_frame = PhysFrame::<Size4KiB>::containing_address(framebuffer_phys_addr);
     let framebuffer_end_phys_frame = PhysFrame::<Size4KiB>::containing_address(framebuffer_phys_addr + framebuffer.len() - 1u64);
 
@@ -112,6 +134,7 @@ pub fn map_physics_memory(
     kernel_pml4_table: &mut TrackedMapper<OffsetPageTable>,
     frame_allocator: &mut impl FrameAllocator<Size4KiB>
 ) -> VirtAddr {
+    // bootloader runtime 阶段物理内存和虚拟内存是恒等映射
     // 用 4kb size 会让下面迭代器迭代过多次
     let start_phys_frame = PhysFrame::<Size2MiB>::containing_address(PhysAddr::new(0));
     let end_phys_frame = PhysFrame::<Size2MiB>::containing_address(max_phys_addr - 1u64);
@@ -131,33 +154,59 @@ pub fn map_physics_memory(
                 .ignore()
         }
     }
+    // 这里不用把 frame 关联到 kernel pml4 页表
 
     phys_start_page.start_address()
 }
 
 pub fn map_kernel_arg(
-    kernel_arg: KernelArg,
+    kernel_arg: &KernelArg,
     kernel_pml4_table: &mut TrackedMapper<OffsetPageTable>,
     frame_allocator: &mut impl FrameAllocator<Size4KiB>
 ) -> VirtAddr {
-    let phys_frame = frame_allocator
-        .allocate_frame()
-        .or_panic("failed to allocate new physics frame for kernel arg.");
+    let kernel_arg_len = size_of::<KernelArg>();
 
-    // uefi boootloader runtime 阶段的虚拟地址和物理地址是无偏移映射的
-    let ptr: *mut KernelArg = phys_frame.start_address().as_u64() as *mut KernelArg;
-    unsafe {
-        *ptr = kernel_arg;
+    let available_p4pti = kernel_pml4_table.find_free_space_and_mark(kernel_arg_len, true)
+        .or_panic("failed to get available pml4 entry for KernelArg, maybe it run out");
+    let kernel_arg_start_page = Page::containing_address(
+        Page::from_page_table_indices_1gib(available_p4pti.0, PageTableIndex::new(0)).start_address()
+    );
+
+    // fast path to write
+    if kernel_arg_len <= 4096 {
+        let frame = frame_allocator.allocate_frame()
+            .or_panic("failed to allocate frame for kernel arg");
+
+        unsafe {
+            (frame.start_address().as_u64() as *mut KernelArg).write(*kernel_arg);
+
+            kernel_pml4_table
+                .map_to(kernel_arg_start_page, frame, PTFlags::PRESENT, frame_allocator)
+                .or_panic("failed to identity map new allocated kernel arg.")
+                .flush();
+        }
+    } else {
+        let kernel_arg_bytes = unsafe { slice::from_raw_parts(kernel_arg as *const _ as *const u8, kernel_arg_len) };
+
+        for slice_index in (0..kernel_arg_len).step_by(4096) {
+            let slice_end = (slice_index + 4096).min(kernel_arg_len);
+
+            let frame = frame_allocator.allocate_frame()
+                .or_panic("failed to allocate frame for kernel arg");
+
+            let dest_frame_slice = unsafe {
+                slice::from_raw_parts_mut(frame.start_address().as_u64() as *mut u8, slice_end - slice_index)
+            };
+            dest_frame_slice.copy_from_slice(&kernel_arg_bytes[slice_index..slice_end]);
+
+            unsafe {
+                kernel_pml4_table
+                    .map_to(kernel_arg_start_page + (slice_index / 4096) as u64, frame, PTFlags::PRESENT, frame_allocator)
+                    .or_panic("failed to identity map new allocated kernel arg.")
+                    .flush();
+            }
+        }
     }
 
-    let kernel_arg_page = Page::containing_address(VirtAddr::new(phys_frame.start_address().as_u64()));
-
-    unsafe {
-        kernel_pml4_table
-            .map_to(kernel_arg_page, phys_frame, PTFlags::PRESENT, frame_allocator)
-            .or_panic("failed to identity map new allocated kernel arg.")
-            .flush();
-
-        kernel_arg_page.start_address()
-    }
+    kernel_arg_start_page.start_address()
 }

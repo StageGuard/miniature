@@ -25,10 +25,7 @@ impl <T, E> PrintPanic<T> for Result<T, E>
     fn or_panic(self, msg: &str) -> T {
         match self {
             Ok(t) => t,
-            Err(e) => {
-                info!("efi panicked: {}: {:?}", msg, e);
-                panic!("{} {:?}", msg, e);
-            },
+            Err(e) => panic!("efi panicked: {}: {:?}", msg, e) ,
         }
     }
 }
