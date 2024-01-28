@@ -30,6 +30,7 @@ pub fn find_current_boot_partition<'a, T : Protocol>(
     for part in partitions {
         let part = part.as_ptr();
         unsafe {
+            // SAFETY: make sure all entries of `partitions` is initialized.
             if (*part).device_path_string.as_bytes() == current_image_device_path.as_bytes() {
                 return Some(&*part)
             }

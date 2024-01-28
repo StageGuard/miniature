@@ -31,6 +31,7 @@ impl Framebuffer {
     }
 
     pub fn slice(&self) -> &'static mut [u8] {
+        // SAFETY: we ensure that `self.ptr` is the pointer points to the framebuffer u8 array
         unsafe { slice::from_raw_parts_mut(self.ptr, self.len) }
     }
 }

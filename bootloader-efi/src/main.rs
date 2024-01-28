@@ -44,6 +44,7 @@ use crate::logger::{init_framebuffer_logger, init_uefi_services_logger};
 
 #[entry]
 fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
+    // SAFETY: 详见 unsafe_clone 和 init
     let mut st = unsafe { 
         uefi::allocator::init(&mut system_table);
         system_table.unsafe_clone()
@@ -52,6 +53,8 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     // locate framebuffer and iniitialize framebuffer logger
     let framebuffer: Option<Framebuffer> = match locate_framebuffer(&st) {
         Some(fb) => {
+            // SAFETY: the framebuffer poniter points to the corresponding memory region
+            // that is allocated by uefi
             init_framebuffer_logger(unsafe { &*(&fb as *const _) });
             info!("framebuffer logger is initialized.");
             Some(fb)
@@ -173,7 +176,7 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         framebuffer_len:            framebuffer.map(|f| f.len).unwrap_or(0),
         framebuffer_width:          framebuffer.map(|f| f.width).unwrap_or(0),
         framebuffer_height:         framebuffer.map(|f| f.height).unwrap_or(0),
-        framebuffer_stride:         framebuffer.map(|f: Framebuffer| f.stride).unwrap_or(0),
+        framebuffer_stride:         framebuffer.map(|f| f.stride).unwrap_or(0),
 
         phys_mem_mapped_addr:       mapped_phys_space_virt_addr.as_u64(),
         phys_mem_size:              frame_allocator.max_phys_addr().as_u64(),
@@ -182,7 +185,10 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
 
         tls_template:               load_kernel.tls_template.unwrap_or_default(),
     };
-    let kernel_arg_virt_addr: VirtAddr = map_kernel_arg(&kernel_arg, &mut kernel_page_table, &mut frame_allocator);
+    
+    // TODO: 详见 map_kernel_arg 注解
+    // SAFETY: 详见 map_kernel_arg 注解
+    let kernel_arg_virt_addr: VirtAddr = map_kernel_arg(&mut unsafe { *(&kernel_arg as *const _ as *mut KernelArg) }, &mut kernel_page_table, &mut frame_allocator);
 
     info!("switching to kernel entry point virt addr: 0x{:x}", load_kernel.kernel_entry);
     unsafe {

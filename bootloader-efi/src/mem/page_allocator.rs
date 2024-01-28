@@ -14,7 +14,7 @@ pub mod boot {
     use super::{MAX_ADDRESS, page_size};
     use crate::panic::PrintPanic;
 
-    /// can be only used at boot stage.
+    /// SAFETY: can be only used at boot stage.
     pub fn allocate_zeroed_page_aligned(system_table: &SystemTable<Boot>, size: usize) -> *mut u8 {
         let page_size = page_size();
         let pages = (size + page_size - 1) / page_size;
@@ -31,7 +31,7 @@ pub mod boot {
         ptr
     }
 
-    /// can be only used at boot stage.
+    /// SAFETY: can be only used at boot stage.
     pub unsafe fn paging_allocate<T : Sized>(system_table: &SystemTable<Boot>) -> Option<&'static mut [T]> {
         let ptr = allocate_zeroed_page_aligned(system_table, page_size());
 
@@ -81,6 +81,8 @@ pub mod runtime {
     pub fn create_page_table(allocator: &mut impl FrameAllocator<Size4KiB>, phys_offset: VirtAddr) -> (TrackedMapper<OffsetPageTable<'static>>, PhysFrame) {
         let frame = allocator.allocate_frame().or_panic("failed to allocate new physics frame for kernel pml4 table");
 
+        // SAFETY: we are now at identical map between phys address and virt address at runtime stage
+        // so it is safe to write to it.
         let page_table = unsafe {
             let ptr: *mut PageTable = phys_offset.add(frame.start_address().as_u64()).as_mut_ptr();
 

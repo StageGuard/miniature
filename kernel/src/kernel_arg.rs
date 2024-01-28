@@ -1,3 +1,5 @@
+use bitflags::bitflags;
+
 #[repr(C)]
 #[derive(Debug, Clone, Copy)]
 pub struct MemoryRegion {
@@ -53,4 +55,27 @@ pub struct KernelArg {
     pub unav_phys_mem_regions_len: usize,
 
     pub tls_template: TlsTemplate
+}
+
+#[repr(C)]
+#[derive(Copy, Clone, Debug)]
+pub struct Framebuffer {
+    pub ptr: *mut u8,
+    pub len: usize,
+
+    pub width: usize,
+    pub height: usize,
+    pub stride: usize,
+    pub pixel_format: FBPixelFormat,
+}
+
+unsafe impl Sync for Framebuffer {}
+unsafe impl Send for Framebuffer {}
+
+bitflags! {
+    #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
+    pub struct FBPixelFormat: u32 {
+        const RGB = 1 << 0;
+        const BGR = 1 << 1;
+    }
 }

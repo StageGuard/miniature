@@ -13,6 +13,18 @@ x86_64 = { version = "0.14.7", default-features = false, features = [
     "inline_asm",
 ] }
 
+noto-sans-mono-bitmap = { version = "0.2.0", default-features = false, features = [
+    "regular",
+    "size_16",
+    "unicode-basic-latin",
+    "unicode-specials"
+] }
+
+bitflags = "2.4.2"
+spin = "0.9.8"
+buddy-alloc = "0.5.1"
+lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
+
 [profile.dev]
 panic = "abort"
 
