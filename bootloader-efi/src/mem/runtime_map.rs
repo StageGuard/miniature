@@ -1,10 +1,13 @@
 use core::{mem::size_of, slice};
 
 use log::info;
-use x86_64::{registers::segmentation::{Segment, CS, DS, ES, SS}, structures::{gdt::{Descriptor, GlobalDescriptorTable}, paging::{FrameAllocator, Mapper, OffsetPageTable, Page, PageTableIndex, PhysFrame, Size2MiB, Size4KiB}}, PhysAddr, VirtAddr};
+use uefi::table::boot::MemoryDescriptor;
+use x86_64::{align_up, registers::segmentation::{Segment, CS, DS, ES, SS}, structures::{gdt::{Descriptor, GlobalDescriptorTable}, paging::{FrameAllocator, Mapper, OffsetPageTable, Page, PageTableIndex, PhysFrame, Size2MiB, Size4KiB}}, PhysAddr, VirtAddr};
 use x86_64::structures::paging::page_table::PageTableFlags as PTFlags;
 
 use crate::{context::KernelArg, mem::tracked_mapper::TrackedMapper, panic::PrintPanic};
+
+use super::{frame_allocator::LinearIncFrameAllocator, MemoryRegion};
 
 // map kernel stack
 pub fn alloc_and_map_kernel_stack(
@@ -159,40 +162,56 @@ pub fn map_physics_memory(
     phys_start_page.start_address()
 }
 
-pub fn map_kernel_arg(
-    kernel_arg: &KernelArg,
+/// 映射 KernelArg 到内核 PML4 页表
+/// 
+/// kernel_arg 是可变的，因为在映射的过程中会分配物理帧，而这些新分配的也要写入到 KernelArg.unav_phys_mem_regions 中
+/// 
+/// TODO: 这样做非常不好，需要优化
+pub fn map_kernel_arg<I: ExactSizeIterator<Item = MemoryDescriptor> + Clone>(
+    kernel_arg: &mut KernelArg,
     kernel_pml4_table: &mut TrackedMapper<OffsetPageTable>,
-    frame_allocator: &mut impl FrameAllocator<Size4KiB>
+    frame_allocator: &mut LinearIncFrameAllocator<I, MemoryDescriptor>
 ) -> VirtAddr {
-    let kernel_arg_len = size_of::<KernelArg>();
+    const KERNEL_ARG_LEN: usize = size_of::<KernelArg>();
 
-    let available_p4pti = kernel_pml4_table.find_free_space_and_mark(kernel_arg_len, true)
+    let available_p4pti = kernel_pml4_table.find_free_space_and_mark(KERNEL_ARG_LEN, true)
         .or_panic("failed to get available pml4 entry for KernelArg, maybe it run out");
     let kernel_arg_start_page = Page::containing_address(
         Page::from_page_table_indices_1gib(available_p4pti.0, PageTableIndex::new(0)).start_address()
     );
 
+    // 存储 KernelArg 需要的物理页帧
+    const NEEDED_PHYS_FRAMES_COUNT: usize = align_up(KERNEL_ARG_LEN as u64, 4096) as usize / 4096;
+    let needed_phys_frames: [PhysFrame; NEEDED_PHYS_FRAMES_COUNT] = [
+        frame_allocator.allocate_frame().or_panic("failed to allocate frame for kernel arg"); 
+        NEEDED_PHYS_FRAMES_COUNT
+    ];
+    let mut curr_needed_phys_frames_idx = 0;
+
+    // 上面使用 FrameAllocator.allocate_frame 了，需要再记录一下
+    kernel_arg.unav_phys_mem_regions[kernel_arg.unav_phys_mem_regions_len] = frame_allocator.allocated_region();
+    kernel_arg.unav_phys_mem_regions_len += 1;
+
     // fast path to write
-    if kernel_arg_len <= 4096 {
-        let frame = frame_allocator.allocate_frame()
-            .or_panic("failed to allocate frame for kernel arg");
+    if KERNEL_ARG_LEN <= 4096 {
+        let frame = &needed_phys_frames[curr_needed_phys_frames_idx];
 
         unsafe {
             (frame.start_address().as_u64() as *mut KernelArg).write(*kernel_arg);
 
             kernel_pml4_table
-                .map_to(kernel_arg_start_page, frame, PTFlags::PRESENT, frame_allocator)
+                .map_to(kernel_arg_start_page, *frame, PTFlags::PRESENT, frame_allocator)
                 .or_panic("failed to identity map new allocated kernel arg.")
                 .flush();
         }
+
+        curr_needed_phys_frames_idx += 1;
     } else {
-        let kernel_arg_bytes = unsafe { slice::from_raw_parts(kernel_arg as *const _ as *const u8, kernel_arg_len) };
+        let kernel_arg_bytes = unsafe { slice::from_raw_parts(kernel_arg as *const _ as *const u8, KERNEL_ARG_LEN) };
 
-        for slice_index in (0..kernel_arg_len).step_by(4096) {
-            let slice_end = (slice_index + 4096).min(kernel_arg_len);
-
-            let frame = frame_allocator.allocate_frame()
-                .or_panic("failed to allocate frame for kernel arg");
+        for slice_index in (0..KERNEL_ARG_LEN).step_by(4096) {
+            let slice_end = (slice_index + 4096).min(KERNEL_ARG_LEN);
+            let frame = &needed_phys_frames[curr_needed_phys_frames_idx];
 
             let dest_frame_slice = unsafe {
                 slice::from_raw_parts_mut(frame.start_address().as_u64() as *mut u8, slice_end - slice_index)
@@ -201,10 +220,12 @@ pub fn map_kernel_arg(
 
             unsafe {
                 kernel_pml4_table
-                    .map_to(kernel_arg_start_page + (slice_index / 4096) as u64, frame, PTFlags::PRESENT, frame_allocator)
+                    .map_to(kernel_arg_start_page + (slice_index / 4096) as u64, *frame, PTFlags::PRESENT, frame_allocator)
                     .or_panic("failed to identity map new allocated kernel arg.")
                     .flush();
             }
+
+            curr_needed_phys_frames_idx += 1;
         }
     }
 
