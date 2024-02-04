@@ -13,6 +13,7 @@ x86_64 = { version = "0.14.7", default-features = false, features = [
     "instructions",
     "inline_asm",
 ] }
+uart_16550 = "0.2.18"
 
 noto-sans-mono-bitmap = { version = "0.2.0", default-features = false, features = [
     "regular",

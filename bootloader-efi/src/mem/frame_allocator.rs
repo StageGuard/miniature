@@ -93,7 +93,7 @@ where
     pub fn allocated_region(&self) -> MemoryRegion {
         MemoryRegion {
             start: self.start_phys_addr.as_u64(),
-            end: self.next_frame.start_address().as_u64(),
+            length: self.next_frame.start_address().as_u64() - self.start_phys_addr.as_u64(),
             kind: MemoryRegionKind::Bootloader
         }
     }

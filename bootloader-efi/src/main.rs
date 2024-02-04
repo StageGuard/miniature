@@ -202,7 +202,7 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     // SAFETY: 详见 map_kernel_arg 注解
     let kernel_arg_virt_addr: VirtAddr = map_kernel_arg(&mut unsafe { *(&kernel_arg as *const _ as *mut KernelArg) }, &mut kernel_page_table, &mut frame_allocator);
 
-    info!("switching to kernel entry point virt addr: 0x{:x}", load_kernel.kernel_entry);
+    info!("switching to kernel entry point virt addr: 0x{:x}, arg virt addr: 0x{:x}", load_kernel.kernel_entry, kernel_arg_virt_addr);
     unsafe {
         // 在 switch 的过程中就已经写入了内核 PML4 表
         context_switch(
@@ -237,7 +237,7 @@ fn construct_unsafe_phys_mem_region_map<I: ExactSizeIterator<Item = MemoryDescri
         if !rg.usable_after_bootloader_exit() {
             regions[curr_idx].write(MemoryRegion {
                 start: rg.start().as_u64(),
-                end: rg.start().as_u64() + rg.page_count * 4096,
+                length: rg.page_count * 4096,
                 kind: MemoryRegionKind::Bootloader
             });
             curr_idx += 1;
@@ -252,7 +252,7 @@ fn construct_unsafe_phys_mem_region_map<I: ExactSizeIterator<Item = MemoryDescri
         let framebuffer_start_phys_addr = framebuffer.ptr as u64;
         regions[curr_idx].write(MemoryRegion {
             start: framebuffer_start_phys_addr,
-            end: framebuffer_start_phys_addr + framebuffer.len as u64,
+            length: framebuffer.len as u64,
             kind: MemoryRegionKind::Bootloader
         });
         curr_idx += 1;
@@ -261,7 +261,7 @@ fn construct_unsafe_phys_mem_region_map<I: ExactSizeIterator<Item = MemoryDescri
     let kernel_bytes_starst_phys_addr = &kernel_bytes[0] as *const _ as u64;
     regions[curr_idx].write(MemoryRegion {
         start: kernel_bytes_starst_phys_addr,
-        end: kernel_bytes_starst_phys_addr + kernel_bytes.len() as u64,
+        length: kernel_bytes.len() as u64,
         kind: MemoryRegionKind::Bootloader
     });
     curr_idx += 1;

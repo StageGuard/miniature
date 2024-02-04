@@ -1,12 +1,12 @@
-use core::{mem::size_of, slice};
+use core::{mem::size_of, ptr, slice};
 
-use log::info;
+use log::{debug, info};
 use uefi::table::boot::MemoryDescriptor;
-use x86_64::{align_up, registers::segmentation::{Segment, CS, DS, ES, SS}, structures::{gdt::{Descriptor, GlobalDescriptorTable}, paging::{FrameAllocator, Mapper, OffsetPageTable, Page, PageTableIndex, PhysFrame, Size2MiB, Size4KiB}}, PhysAddr, VirtAddr};
+use x86_64::{align_down, align_up, registers::segmentation::{Segment, CS, DS, ES, SS}, structures::{gdt::{Descriptor, GlobalDescriptorTable}, paging::{FrameAllocator, Mapper, OffsetPageTable, Page, PageTableIndex, PhysFrame, Size2MiB, Size4KiB}}, PhysAddr, VirtAddr};
 use x86_64::structures::paging::page_table::PageTableFlags as PTFlags;
 
 use crate::mem::tracked_mapper::TrackedMapper;
-use shared::{arg::KernelArg, print_panic::PrintPanic};
+use shared::{arg::{KernelArg, MemoryRegion}, print_panic::PrintPanic};
 
 use super::frame_allocator::LinearIncFrameAllocator;
 
@@ -173,62 +173,40 @@ pub fn map_kernel_arg<I: ExactSizeIterator<Item = MemoryDescriptor> + Clone>(
     kernel_pml4_table: &mut TrackedMapper<OffsetPageTable>,
     frame_allocator: &mut LinearIncFrameAllocator<I, MemoryDescriptor>
 ) -> VirtAddr {
-    const KERNEL_ARG_LEN: usize = size_of::<KernelArg>();
+    let kernel_arg_phys_addr = kernel_arg as *const _ as u64;
+    const KERNEL_ARG_LEN: u64 = size_of::<KernelArg>() as u64;
 
-    let available_p4pti = kernel_pml4_table.find_free_space_and_mark(KERNEL_ARG_LEN, true)
+    let available_p4pti = kernel_pml4_table.find_free_space_and_mark(KERNEL_ARG_LEN as usize, true)
         .or_panic("failed to get available pml4 entry for KernelArg, maybe it run out");
     let kernel_arg_start_page = Page::containing_address(
         Page::from_page_table_indices_1gib(available_p4pti.0, PageTableIndex::new(0)).start_address()
     );
 
-    // 存储 KernelArg 需要的物理页帧
-    const NEEDED_PHYS_FRAMES_COUNT: usize = align_up(KERNEL_ARG_LEN as u64, 4096) as usize / 4096;
-    let needed_phys_frames: [PhysFrame; NEEDED_PHYS_FRAMES_COUNT] = [
-        frame_allocator.allocate_frame().or_panic("failed to allocate frame for kernel arg"); 
-        NEEDED_PHYS_FRAMES_COUNT
-    ];
-    let mut curr_needed_phys_frames_idx = 0;
+    let kernel_arg_phys_frame_start = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(kernel_arg_phys_addr));
+    let kernel_arg_phys_frame_end = PhysFrame::<Size4KiB>::containing_address(PhysAddr::new(kernel_arg_phys_addr + KERNEL_ARG_LEN - 1));
+
+    for frame in PhysFrame::range_inclusive(kernel_arg_phys_frame_start, kernel_arg_phys_frame_end) {
+        let page = kernel_arg_start_page + (frame - kernel_arg_phys_frame_start);
+
+        unsafe {
+            kernel_pml4_table
+                .map_to(page, frame, PTFlags::PRESENT, frame_allocator)
+                .or_panic("failed to identity map new allocated kernel arg.")
+                .flush();
+        }
+    }
+
+    // kernel arg 的物理内存区域也不可用
+    kernel_arg.unav_phys_mem_regions[kernel_arg.unav_phys_mem_regions_len] = MemoryRegion {
+        start: kernel_arg as *const _ as u64,
+        length: KERNEL_ARG_LEN,
+        kind: shared::arg::MemoryRegionKind::Bootloader
+    };
+    kernel_arg.unav_phys_mem_regions_len += 1;
 
     // 上面使用 FrameAllocator.allocate_frame 了，需要再记录一下
     kernel_arg.unav_phys_mem_regions[kernel_arg.unav_phys_mem_regions_len] = frame_allocator.allocated_region();
     kernel_arg.unav_phys_mem_regions_len += 1;
 
-    // fast path to write
-    if KERNEL_ARG_LEN <= 4096 {
-        let frame = &needed_phys_frames[curr_needed_phys_frames_idx];
-
-        unsafe {
-            (frame.start_address().as_u64() as *mut KernelArg).write(*kernel_arg);
-
-            kernel_pml4_table
-                .map_to(kernel_arg_start_page, *frame, PTFlags::PRESENT, frame_allocator)
-                .or_panic("failed to identity map new allocated kernel arg.")
-                .flush();
-        }
-
-        curr_needed_phys_frames_idx += 1;
-    } else {
-        let kernel_arg_bytes = unsafe { slice::from_raw_parts(kernel_arg as *const _ as *const u8, KERNEL_ARG_LEN) };
-
-        for slice_index in (0..KERNEL_ARG_LEN).step_by(4096) {
-            let slice_end = (slice_index + 4096).min(KERNEL_ARG_LEN);
-            let frame = &needed_phys_frames[curr_needed_phys_frames_idx];
-
-            let dest_frame_slice = unsafe {
-                slice::from_raw_parts_mut(frame.start_address().as_u64() as *mut u8, slice_end - slice_index)
-            };
-            dest_frame_slice.copy_from_slice(&kernel_arg_bytes[slice_index..slice_end]);
-
-            unsafe {
-                kernel_pml4_table
-                    .map_to(kernel_arg_start_page + (slice_index / 4096) as u64, *frame, PTFlags::PRESENT, frame_allocator)
-                    .or_panic("failed to identity map new allocated kernel arg.")
-                    .flush();
-            }
-
-            curr_needed_phys_frames_idx += 1;
-        }
-    }
-
-    kernel_arg_start_page.start_address()
+    kernel_arg_start_page.start_address() + (kernel_arg_phys_addr - align_down(kernel_arg_phys_addr, 4096))
 }

@@ -1,3 +1,16 @@
+use core::fmt;
+use lazy_static::lazy_static;
+use spin::Mutex;
+use uart_16550::SerialPort;
+
+lazy_static! {
+    pub static ref STDIO_PORT: Mutex<SerialPort> = unsafe { 
+        let mut port = SerialPort::new(0x3F8);
+        port.init();
+        Mutex::new(port)
+    };
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 #[repr(u32)]
 pub enum QemuExitCode {
@@ -16,4 +29,18 @@ pub fn exit_qemu(exit_code: QemuExitCode) -> ! {
     loop {
         nop();
     }
+}
+
+#[macro_export]
+macro_rules! qemu_print {
+    ($fmt: literal $(, $($arg: tt)+)?) => {{
+        $crate::device::qemu::STDIO_PORT.lock().write_fmt(format_args!($fmt $(, $($arg)+)?));
+    }};
+}
+
+#[macro_export]
+macro_rules! qemu_println {
+    ($fmt: literal $(, $($arg: tt)+)?) => {{
+        $crate::device::qemu::STDIO_PORT.lock().write_fmt(format_args!(concat!($fmt, "\n") $(, $($arg)+)?));
+    }};
 }

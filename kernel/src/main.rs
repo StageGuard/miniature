@@ -1,14 +1,14 @@
 #![no_main]
 #![no_std]
 
-use core::{arch::{self, asm}, mem::MaybeUninit, slice};
+use core::{arch::{self, asm}, fmt::Write, mem::MaybeUninit, slice};
 
 use alloc::vec::Vec;
 use device::qemu::exit_qemu;
 use lazy_static::lazy_static;
 use log::{info, Log};
 use shared::{arg::KernelArg, framebuffer::{FBPixelFormat, Framebuffer}, uni_processor::UPSafeCell};
-use spin::Mutex;
+use spin::mutex::Mutex;
 
 use crate::logger::FramebufferLogger;
 
@@ -26,10 +26,6 @@ lazy_static! {
 
 #[no_mangle]
 pub extern "C" fn _start(arg: &'static KernelArg) -> ! {
-    unsafe {
-        (arg.framebuffer_addr as *mut u8).add(512).write_volatile(0);
-        exit_qemu(device::qemu::QemuExitCode::Success)
-    }
     {
         // initialize framebuffer
         let framebuffer_mutex = FRAMEBUFFER.inner_exclusive_mut();

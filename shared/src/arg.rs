@@ -1,12 +1,12 @@
-use core::mem::MaybeUninit;
+use core::{fmt::{self, Debug}, mem::MaybeUninit};
 
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct MemoryRegion {
     /// The physical start address of the region.
     pub start: u64,
-    /// The physical end address (exclusive) of the region.
-    pub end: u64,
+    /// length.
+    pub length: u64,
     /// The memory type of the memory region.
     ///
     /// Only [`Usable`][MemoryRegionKind::Usable] regions can be freely used.
@@ -18,28 +18,9 @@ impl MemoryRegion {
     pub const fn empty() -> Self {
         MemoryRegion {
             start: 0,
-            end: 0,
+            length: 0,
             kind: MemoryRegionKind::Bootloader,
         }
-    }
-
-    pub fn add_region(
-        region: Self,
-        regions: &mut [MaybeUninit<Self>],
-        next_index: &mut usize,
-    ) {
-        if region.start == region.end {
-            // skip zero sized regions
-            return;
-        }
-        unsafe {
-            regions
-                .get_mut(*next_index)
-                .expect("cannot add region: no more free entries in memory map")
-                .as_mut_ptr()
-                .write(region)
-        };
-        *next_index += 1;
     }
 }
 
