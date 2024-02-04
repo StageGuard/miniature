@@ -5,9 +5,10 @@ use uefi::table::boot::MemoryDescriptor;
 use x86_64::{align_up, registers::segmentation::{Segment, CS, DS, ES, SS}, structures::{gdt::{Descriptor, GlobalDescriptorTable}, paging::{FrameAllocator, Mapper, OffsetPageTable, Page, PageTableIndex, PhysFrame, Size2MiB, Size4KiB}}, PhysAddr, VirtAddr};
 use x86_64::structures::paging::page_table::PageTableFlags as PTFlags;
 
-use crate::{context::KernelArg, mem::tracked_mapper::TrackedMapper, panic::PrintPanic};
+use crate::mem::tracked_mapper::TrackedMapper;
+use shared::{arg::KernelArg, print_panic::PrintPanic};
 
-use super::{frame_allocator::LinearIncFrameAllocator, MemoryRegion};
+use super::frame_allocator::LinearIncFrameAllocator;
 
 // map kernel stack
 pub fn alloc_and_map_kernel_stack(

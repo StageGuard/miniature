@@ -1,9 +1,10 @@
+use shared::arg::{MemoryRegion, MemoryRegionKind};
 use x86_64::{
     structures::paging::{FrameAllocator, PhysFrame, Size4KiB},
     PhysAddr,
 };
 
-use super::{MemoryRegion, MemoryRegionKind, RTMemoryRegionDescriptor};
+use super::RTMemoryRegionDescriptor;
 
 
 

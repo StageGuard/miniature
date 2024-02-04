@@ -1,9 +1,10 @@
 use core::mem::MaybeUninit;
 
 use log::warn;
+use shared::print_panic::PrintPanic;
 use uefi::{proto::{Protocol, device_path::DevicePath, loaded_image::LoadedImage}, table::boot::BootServices};
 
-use crate::{device::retrieve::ProtocolWithHandle, panic::PrintPanic};
+use crate::device::retrieve::ProtocolWithHandle;
 
 use super::retrieve::get_device_path_str;
 

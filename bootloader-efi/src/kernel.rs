@@ -1,10 +1,11 @@
-use log::{info, warn};
+use log::{debug, info, warn};
 use x86_64::{align_up, structures::paging::{mapper::{MappedFrame, TranslateResult}, page::PageRangeInclusive, FrameAllocator, Mapper, OffsetPageTable, Page, PageTableIndex, PhysFrame, Size4KiB, Translate}, PhysAddr, VirtAddr};
 use x86_64::structures::paging::page_table::PageTableFlags as PTFlags;
 use xmas_elf::{dynamic, header::{self, Type as EType}, program::{self, SegmentData, Type as ShType}, sections::Rela, ElfFile};
 use core::{cmp, iter::Step, mem::size_of, ptr};
 
-use crate::{mem::tracked_mapper::TrackedMapper, panic::PrintPanic};
+use crate::mem::tracked_mapper::TrackedMapper;
+use shared::{arg::TlsTemplate, print_panic::PrintPanic};
 
 pub struct LoadKernel {
     // kernel 实际虚拟地址入口
@@ -13,14 +14,6 @@ pub struct LoadKernel {
     pub kernel_virt_space_offset: i128,
     // thread local storage
     pub tls_template: Option<TlsTemplate>,
-}
-
-#[repr(C)]
-#[derive(Clone, Copy, Debug, Default)]
-pub struct TlsTemplate {
-    pub start_virt_addr: u64,
-    pub mem_size: usize,
-    pub file_size: usize
 }
 
 /// load kernel segments to virtual memory
@@ -139,18 +132,20 @@ pub fn load_kernel_to_virt_mem(
                 if ph.mem_size() <= ph.file_size() { continue; }
         
                 // 段有 .bss 部分，需要 zero-fill
-                // 这部分还没测试，需要找一个内含 section header 记录 mem_size 比 file_size 大的 elf 文件才能测试
                 let seg_bss_start_virt_addr = seg_file_end_virt_addr;
                 let seg_bss_end_virt_addr = seg_mem_end_virt_addr;
+
+                info!("clearing .bss segments from virt 0x{:x} to 0x{:x}", seg_bss_start_virt_addr, seg_bss_end_virt_addr);
 
                 // .bss 部分需要跟在 file 后并且填充 0
                 // 在物理内存中，段 file 结束所在的物理页帧可能包含其他东西，而不仅仅是段 file
                 // 如果有那不能直接写成 0，需要分配一个新的页帧，把东西复制过去。
                 // 然后把 file 结束的虚拟地址映射到这个新的页，这样就不会修改原先的页帧了。
 
-                let file_end_relative_addr = seg_bss_start_virt_addr.as_u64() & 0xff;
+                let file_end_relative_addr = seg_bss_start_virt_addr.as_u64() & 0xfff;
                 // 检测一下 file 结束地址是不是页对齐的
                 if file_end_relative_addr != 0 {
+                    debug!("start virt addr of .bss segments is not aligned, offset = {}", file_end_relative_addr);
                     // 如果不是对齐的，我们需要特殊处理 bss 段的第一个页
                     // 分配一个新的物理页，把这一页复制过去，然后再 zero-fill 新复制的页的 bss 段
                     let last_page = Page::<Size4KiB>::containing_address(seg_bss_start_virt_addr - 1u64);

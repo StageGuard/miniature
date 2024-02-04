@@ -3,31 +3,21 @@
 #![feature(step_trait)]
 #![feature(maybe_uninit_uninit_array)]
 
-mod panic;
-mod acpi;
-mod fs;
-mod kernel;
-mod framebuffer;
-mod logger;
-mod sync;
-mod mem;
-mod device;
-mod context;
-
-use core::arch::asm;
 use core::mem::MaybeUninit;
-
 use core::slice;
-use log::{info, warn, debug, error};
-use mem::{MemoryRegion, MemoryRegionKind, RTMemoryRegionDescriptor};
+use log::{info, warn, debug};
+use mem::RTMemoryRegionDescriptor;
+use shared::arg::{KernelArg, MemoryRegion, MemoryRegionKind};
+use shared::framebuffer::Framebuffer;
 use uefi::proto::media::partition::PartitionInfo;
 use uefi::table::{SystemTable, Boot};
 use uefi::table::boot::{MemoryDescriptor, MemoryMap, MemoryType};
 use uefi::{entry, Handle, Status, allocator};
 use x86_64::registers::control::{Cr0, Cr0Flags};
 use x86_64::registers::model_specific::{Efer, EferFlags};
+use x86_64::structures::paging::{Mapper, PageTableFlags};
 use x86_64::VirtAddr;
-use crate::context::{context_switch, KernelArg};
+use crate::context::context_switch;
 use crate::device::partition::find_current_boot_partition;
 use crate::device::retrieve::{list_handles, ProtocolWithHandle};
 use crate::acpi::find_acpi_table_pointer;
@@ -35,12 +25,26 @@ use crate::fs::{open_sfs, load_file_sfs};
 use crate::kernel::load_kernel_to_virt_mem;
 use crate::mem::frame_allocator::LinearIncFrameAllocator;
 use crate::mem::page_allocator;
-use crate::mem::runtime_map::{alloc_and_map_gdt_identically, alloc_and_map_kernel_stack, map_context_switch_identically, map_framebuffer, map_kernel_arg, map_physics_memory};
-use crate::panic::PrintPanic;
-use crate::framebuffer::{locate_framebuffer, Framebuffer};
+use crate::mem::runtime_map::{
+    alloc_and_map_gdt_identically, 
+    alloc_and_map_kernel_stack, 
+    map_context_switch_identically, 
+    map_framebuffer, map_kernel_arg, 
+    map_physics_memory
+};
+use shared::print_panic::PrintPanic;
+use crate::framebuffer::locate_framebuffer;
 use crate::logger::{init_framebuffer_logger, init_uefi_services_logger};
 
-
+mod panic;
+mod acpi;
+mod fs;
+mod kernel;
+mod framebuffer;
+mod logger;
+mod mem;
+mod device;
+mod context;
 
 #[entry]
 fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
@@ -56,7 +60,7 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
             // SAFETY: the framebuffer poniter points to the corresponding memory region
             // that is allocated by uefi
             init_framebuffer_logger(unsafe { &*(&fb as *const _) });
-            info!("framebuffer logger is initialized.");
+            info!("efi framebuffer logger is initialized.");
             Some(fb)
         },
         None => {
@@ -70,8 +74,8 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     let acpi_ptr = find_acpi_table_pointer(&st);
 
     // find partition of current loaded image.
-    const uninited: MaybeUninit<ProtocolWithHandle<'_, PartitionInfo>> = MaybeUninit::<ProtocolWithHandle<PartitionInfo>>::uninit();
-    let mut partitions = [uninited; 256];
+    const PWH_UNINITIALIZED: MaybeUninit<ProtocolWithHandle<'_, PartitionInfo>> = MaybeUninit::<ProtocolWithHandle<PartitionInfo>>::uninit();
+    let mut partitions = [PWH_UNINITIALIZED; 256];
     let partition_len = list_handles::<PartitionInfo>(boot_services, &mut partitions);
     let current_image_partition = match find_current_boot_partition(boot_services, &partitions[..partition_len]) {
         Some(t) => t,
@@ -131,6 +135,14 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     // map gdt, identical map
     let kernel_gdt = alloc_and_map_gdt_identically(&mut kernel_page_table, &mut frame_allocator);
     info!("global descriptor table virt addr: 0x{:x}", kernel_gdt.as_u64());
+
+    // map kernel pml4 table, identical map
+    // because Cr3 register is also virtual address of page table.
+    unsafe {
+        kernel_page_table.identity_map(kernel_pml4_table_phys_frame, PageTableFlags::PRESENT, &mut frame_allocator)
+            .or_panic("failed to map kernel pml4 table")
+            .ignore();
+    }
 
     // 创建内核栈并加载到内核 PML4 页表
     let kernel_stack_size = 4096 * 128; // 128 KiB

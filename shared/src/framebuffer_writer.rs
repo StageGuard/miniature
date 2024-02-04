@@ -1,20 +1,16 @@
-use core::{slice, fmt};
+use core::{fmt, slice};
 
-use shared::{framebuffer::{Framebuffer, FBPixelFormat}, print_panic::PrintPanic};
+use crate::{framebuffer::{Framebuffer, FBPixelFormat}, print_panic::PrintPanic};
 use noto_sans_mono_bitmap::{
     get_raster, get_raster_width, FontWeight, RasterHeight, RasterizedChar,
 };
 use core::ptr;
-use lazy_static::lazy_static;
 
 const LINE_SPACING: usize = 2;
 const LETTER_SPACING: usize = 0;
 
 const BORDER_PADDING: usize = 1;
 
-lazy_static! {
-    static ref SIZE16: RasterHeight = RasterHeight::Size16;
-}
 
 pub struct FrameBufferWriter<'a> {
     framebuffer: &'a Framebuffer,
@@ -39,7 +35,7 @@ impl <'a> FrameBufferWriter<'a> {
     }
 
     fn newline(&mut self) {
-        self.curr_y_pos += SIZE16.val() + LINE_SPACING;
+        self.curr_y_pos += RasterHeight::Size16.val() + LINE_SPACING;
         self.carriage_return()
     }
 
@@ -58,11 +54,11 @@ impl <'a> FrameBufferWriter<'a> {
             '\n' => self.newline(),
             '\r' => self.carriage_return(),
             c => {
-                let new_xpos = self.curr_x_pos +  get_raster_width(FontWeight::Regular, *SIZE16);
+                let new_xpos = self.curr_x_pos +  get_raster_width(FontWeight::Regular, RasterHeight::Size16);
                 if new_xpos >= self.framebuffer.width {
                     self.newline();
                 }
-                let new_ypos = self.curr_y_pos + SIZE16.val() + BORDER_PADDING;
+                let new_ypos = self.curr_y_pos + RasterHeight::Size16.val() + BORDER_PADDING;
                 if new_ypos >= self.framebuffer.height {
                     self.clear();
                 }
@@ -99,8 +95,8 @@ impl <'a> FrameBufferWriter<'a> {
 }
 
 fn get_raser_or_fallback(c: char) -> RasterizedChar {
-    get_raster(c, FontWeight::Regular, *SIZE16)
-        .unwrap_or_else(|| get_raster('\u{FFFD}', FontWeight::Regular, *SIZE16)
+    get_raster(c, FontWeight::Regular, RasterHeight::Size16)
+        .unwrap_or_else(|| get_raster('\u{FFFD}', FontWeight::Regular, RasterHeight::Size16)
             .or_panic("failed to get char and its fallback")
         )
 }

@@ -2,17 +2,16 @@ use core::{mem::MaybeUninit, fmt::Write};
 
 use lazy_static::lazy_static;
 use log::info;
+use shared::{framebuffer::Framebuffer, uni_processor::UPSafeCell};
 use spin::mutex::Mutex;
 use uefi::table::{SystemTable, Boot};
 
-use crate::framebuffer::Framebuffer;
 use crate::logger::writer::FrameBufferWriter;
-use crate::sync::upsafe_cell::UPSafeCell;
 
 pub mod writer;
 
 lazy_static! {
-    static ref FRAMEBUFFER_LOGGER: UPSafeCell<Mutex<MaybeUninit<FramebufferLogger<'static>>>> = unsafe { UPSafeCell::new(Mutex::new(MaybeUninit::uninit())) };
+    static ref FRAMEBUFFER_LOGGER: UPSafeCell<MaybeUninit<FramebufferLogger<'static>>> = unsafe { UPSafeCell::new(MaybeUninit::uninit()) };
     static ref UEFI_STDOUT_LOGGER: UPSafeCell<Mutex<MaybeUninit<uefi::logger::Logger>>> = unsafe { UPSafeCell::new(Mutex::new(MaybeUninit::uninit())) };
 }
 
@@ -45,9 +44,7 @@ impl log::Log for FramebufferLogger<'_> {
 }
 
 pub fn init_framebuffer_logger(framebuffer: &'static Framebuffer) {
-
-    let logger_mutex = FRAMEBUFFER_LOGGER.borrow_mut();
-    let mut logger = logger_mutex.lock();
+    let mut logger = FRAMEBUFFER_LOGGER.inner_exclusive_mut();
     logger.write(FramebufferLogger::new(framebuffer));
 
     if let Err(err) = log::set_logger(unsafe { &*logger.as_ptr() }) {
@@ -57,7 +54,7 @@ pub fn init_framebuffer_logger(framebuffer: &'static Framebuffer) {
 }
 
 pub fn init_uefi_services_logger(system_table: &mut SystemTable<Boot>) {
-    let logger_mutex: core::cell::RefMut<'_, Mutex<MaybeUninit<uefi::logger::Logger>>> = UEFI_STDOUT_LOGGER.borrow_mut();
+    let logger_mutex: core::cell::RefMut<'_, Mutex<MaybeUninit<uefi::logger::Logger>>> = UEFI_STDOUT_LOGGER.inner_exclusive_mut();
     let mut logger = logger_mutex.lock();
 
     let uefi_logger = uefi::logger::Logger::new();

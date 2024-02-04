@@ -1,7 +1,8 @@
+use shared::arg::MemoryRegionKind;
 use uefi::table::boot::{MemoryDescriptor, MemoryType};
 use x86_64::PhysAddr;
 
-use crate::mem::{RTMemoryRegionDescriptor, MemoryRegionKind};
+use crate::mem::RTMemoryRegionDescriptor;
 
 const PAGE_SIZE: u64 = 4096;
 

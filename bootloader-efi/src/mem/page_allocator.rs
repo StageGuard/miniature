@@ -12,7 +12,7 @@ pub mod boot {
     use uefi::table::{Boot, SystemTable};
     use uefi::table::boot::{AllocateType, MemoryType};
     use super::{MAX_ADDRESS, page_size};
-    use crate::panic::PrintPanic;
+    use shared::print_panic::PrintPanic;
 
     /// SAFETY: can be only used at boot stage.
     pub fn allocate_zeroed_page_aligned(system_table: &SystemTable<Boot>, size: usize) -> *mut u8 {
@@ -48,7 +48,8 @@ pub mod runtime {
 
     use x86_64::{registers::control::{Cr3, Cr3Flags}, structures::paging::{page_table::PageTableLevel, FrameAllocator, OffsetPageTable, PageTable, PhysFrame, Size4KiB}, VirtAddr};
 
-    use crate::{mem::tracked_mapper::TrackedMapper, panic::PrintPanic};
+    use crate::mem::tracked_mapper::TrackedMapper;
+    use shared::print_panic::PrintPanic;
 
 
     /// map current level4 page table (boot stage) to runtime stage page table

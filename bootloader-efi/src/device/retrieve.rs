@@ -1,12 +1,12 @@
 use core::mem::MaybeUninit;
 
 use log::warn;
+use shared::print_panic::PrintPanic;
 use uefi::proto::Protocol;
 use uefi::{Identify, Handle};
 use uefi::proto::device_path::DevicePath;
 use uefi::proto::device_path::text::{DevicePathToText, DisplayOnly, AllowShortcuts, PoolString};
 use uefi::table::boot::{SearchType, BootServices, ScopedProtocol};
-use crate::panic::PrintPanic;
 
 #[derive(Debug)]
 pub struct ProtocolWithHandle<'a, P : Protocol> {

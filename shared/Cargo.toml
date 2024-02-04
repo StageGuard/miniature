@@ -1,5 +1,5 @@
 [package]
-name = "kernel"
+name = "shared"
 version = "0.1.0"
 edition = "2021"
 authors = ["StageGuard <beamiscool@qq.com>"]
@@ -7,13 +7,6 @@ authors = ["StageGuard <beamiscool@qq.com>"]
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-shared = { path = "../shared"}
-log = "0.4.20"
-x86_64 = { version = "0.14.7", default-features = false, features = [
-    "instructions",
-    "inline_asm",
-] }
-
 noto-sans-mono-bitmap = { version = "0.2.0", default-features = false, features = [
     "regular",
     "size_16",
@@ -22,12 +15,3 @@ noto-sans-mono-bitmap = { version = "0.2.0", default-features = false, features 
 ] }
 
 bitflags = "2.4.2"
-spin = "0.9.8"
-buddy-alloc = "0.5.1"
-lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
-
-[profile.dev]
-panic = "abort"
-
-[profile.release]
-panic = "abort"
