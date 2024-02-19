@@ -10,7 +10,7 @@ const RT_HEAP_SIZE: usize = 0x10_8000;
 static mut RT_HEAP_SPACE: [u8; RT_HEAP_SIZE] = [0; RT_HEAP_SIZE];
 
 lazy_static! {
-    static ref RUNTIME_HEAP_ALLOC: UPSafeCell<LockedGlobalAlloc> = unsafe { 
+    static ref RUNTIME_HEAP_ALLOC: UPSafeCell<LockedGlobalAlloc> = unsafe {
         let fast_param = FastAllocParam::new(RT_HEAP_SPACE.as_ptr(), 0x10_0000);
         let buddy_param = BuddyAllocParam::new(RT_HEAP_SPACE[0x10_0000..].as_ptr(), 0x8000, 32);
         UPSafeCell::new(LockedGlobalAlloc::new(NonThreadsafeAlloc::new(fast_param, buddy_param)))

@@ -208,5 +208,8 @@ pub fn map_kernel_arg<I: ExactSizeIterator<Item = MemoryDescriptor> + Clone>(
     kernel_arg.unav_phys_mem_regions[kernel_arg.unav_phys_mem_regions_len] = frame_allocator.allocated_region();
     kernel_arg.unav_phys_mem_regions_len += 1;
 
+    // 按照 MemoryRegion.start 排序
+    kernel_arg.unav_phys_mem_regions[..kernel_arg.unav_phys_mem_regions_len].sort_unstable_by_key(|r| r.start);
+
     kernel_arg_start_page.start_address() + (kernel_arg_phys_addr - align_down(kernel_arg_phys_addr, 4096))
 }
