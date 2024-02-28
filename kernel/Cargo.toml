@@ -26,6 +26,7 @@ bitflags = "2.4.2"
 spin = "0.9.8"
 buddy-alloc = "0.5.1"
 lazy_static = { version = "1.4.0", features = ["spin_no_std"] }
+pic8259 = "0.10.1"
 
 [profile.dev]
 panic = "abort"

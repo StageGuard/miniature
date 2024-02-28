@@ -9,7 +9,7 @@ lazy_static! {
     pub static ref FRAMEBUFFER: UPSafeCell<Mutex<MaybeUninit<Framebuffer>>> = unsafe { UPSafeCell::new(Mutex::new(MaybeUninit::uninit())) };
 }
 
-pub fn initialize_framebuffer(kernel_arg: &KernelArg) {
+pub fn init_framebuffer(kernel_arg: &KernelArg) {
     // initialize framebuffer
     let framebuffer_mutex = FRAMEBUFFER.inner_exclusive_mut();
     let mut framebuffer = framebuffer_mutex.lock();

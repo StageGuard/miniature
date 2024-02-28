@@ -89,15 +89,13 @@ pub fn alloc_and_map_gdt_identically(
         SS::set_reg(data_selector);
     }
 
-    let gdt_identical_page = Page::containing_address(VirtAddr::new(gdt_phys_frame.start_address().as_u64()));
-
     unsafe {
         kernel_pml4_table
-            .map_to(gdt_identical_page, gdt_phys_frame, PTFlags::PRESENT, frame_allocator)
+            .identity_map(gdt_phys_frame, PTFlags::PRESENT | PTFlags::WRITABLE, frame_allocator)
             .or_panic("failed to identity map new allocated global descriptor table.")
             .flush();
     }
-    gdt_identical_page.start_address()
+    VirtAddr::new(gdt_phys_frame.start_address().as_u64())
 }
 
 pub fn map_framebuffer(

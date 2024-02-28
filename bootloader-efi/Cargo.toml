@@ -12,6 +12,7 @@ shared = { path = "../shared"}
 uefi = { version = "0.26.0", features = ["logger"]}
 x86_64 = "0.14.11"
 xmas-elf = "0.9.1"
+acpi = { version = "5.0.0", default-features = false, features = []}
 
 log = "0.4.20"
 bitflags = "2.4.2"

@@ -4,17 +4,24 @@
 #![feature(maybe_uninit_uninit_array)]
 
 use core::mem::MaybeUninit;
+use core::ptr::{slice_from_raw_parts, NonNull};
 use core::slice;
+use ::acpi::fadt::Fadt;
+use ::acpi::madt::{Madt, MadtEntry};
+use ::acpi::{AcpiHandler, PhysicalMapping};
 use log::{info, warn, debug};
+use mem::page_allocator::boot::allocate_zeroed_page_aligned;
 use mem::RTMemoryRegionDescriptor;
 use shared::arg::{KernelArg, MemoryRegion, MemoryRegionKind};
 use shared::framebuffer::Framebuffer;
+use uefi::proto::console::serial::Serial;
 use uefi::proto::media::partition::PartitionInfo;
 use uefi::table::{SystemTable, Boot};
 use uefi::table::boot::{MemoryDescriptor, MemoryMap, MemoryType};
 use uefi::{entry, Handle, Status, allocator};
+use x86_64::instructions::port::Port;
 use x86_64::registers::control::{Cr0, Cr0Flags};
-use x86_64::registers::model_specific::{Efer, EferFlags};
+use x86_64::registers::model_specific::{Efer, EferFlags, Msr};
 use x86_64::structures::paging::{Mapper, PageTableFlags};
 use x86_64::VirtAddr;
 use crate::context::context_switch;
@@ -46,6 +53,25 @@ mod mem;
 mod device;
 mod context;
 
+#[derive(Clone)]
+struct UefiAcpiHandler<'a>(&'a SystemTable<Boot>);
+
+impl AcpiHandler for UefiAcpiHandler<'_> {
+    unsafe fn map_physical_region<T>(&self, physical_address: usize, size: usize) -> ::acpi::PhysicalMapping<Self, T> {
+        PhysicalMapping::new(
+            physical_address, 
+            NonNull::new_unchecked(physical_address as u64 as *mut T), 
+            size,
+            size,
+            self.clone()
+        )
+    }
+
+    fn unmap_physical_region<T>(_region: &::acpi::PhysicalMapping<Self, T>) {
+        
+    }
+}
+
 #[entry]
 fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
     // SAFETY: 详见 unsafe_clone 和 init
@@ -71,7 +97,48 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     };
     let boot_services = st.boot_services();
 
-    let acpi_ptr = find_acpi_table_pointer(&st);
+    // try to initialize acpi mode
+    let apic = find_acpi_table_pointer(&st).map(|(ptr, _)| unsafe {
+        let handler = UefiAcpiHandler(&st);
+        let acpi_table = ::acpi::AcpiTables::from_rsdp(handler, ptr as usize)
+            .or_panic("failed to parse ACPI table from RSDP");
+
+        let fadt = acpi_table.find_table::<Fadt>()
+            .or_panic("no FADT entry in ACPI table");
+
+        if fadt.smi_cmd_port == 0 {
+            warn!("System Management Mode is not supported.");
+            return
+        }
+
+        let mut smi_serial = Port::new(fadt.smi_cmd_port as u16);
+        smi_serial.write(fadt.acpi_enable);
+
+        info!("pm1a addr: {}", fadt.pm1a_control_block().unwrap().address);
+        let mut pm1a_cb_serial: Port<u16> = Port::new(fadt.pm1a_control_block().unwrap().address as u16);
+
+        // TODO: wait for 3 seconds which do as same as linux kernel
+        while pm1a_cb_serial.read() & 1 == 0 {
+            core::arch::asm!("hlt");
+        }
+
+        let madt = acpi_table.find_table::<Madt>()
+            .or_panic("no MADT entry in ACPI table");
+
+        let madt_entries = madt.entries();
+
+        for entry in madt_entries {
+            match entry {
+                MadtEntry::LocalApic(local_apic) => {
+                    let base = read_local_apic_base();
+                    info!("localapicb: {:x}", base);
+                },
+                _ => { }
+            }
+        }
+    });
+
+
 
     // find partition of current loaded image.
     const PWH_UNINITIALIZED: MaybeUninit<ProtocolWithHandle<'_, PartitionInfo>> = MaybeUninit::<ProtocolWithHandle<PartitionInfo>>::uninit();
@@ -212,6 +279,13 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
             load_kernel.kernel_entry.as_u64(),
             kernel_arg_virt_addr.as_u64()
         )
+    }
+}
+
+fn read_local_apic_base() -> u64 {
+    const IA32_APIC_BASE_MSR: u32 = 0x1B;
+    unsafe {
+        Msr::new(IA32_APIC_BASE_MSR).read()
     }
 }
 

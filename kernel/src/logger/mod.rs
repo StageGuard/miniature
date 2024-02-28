@@ -38,7 +38,7 @@ impl log::Log for FramebufferLogger<'_> {
     }
 }
 
-pub fn initialize_framebuffer_logger(framebuffer: &'static Framebuffer) {
+pub fn init_framebuffer_logger(framebuffer: &'static Framebuffer) {
     let mut logger = FRAMEBUFFER_LOGGER.inner_exclusive_mut();
     let logger_ref = logger.write(FramebufferLogger::new(framebuffer));
 

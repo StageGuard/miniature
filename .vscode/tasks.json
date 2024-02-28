@@ -18,7 +18,7 @@
                 "showReuseMessage": false, 
                 "clear": true
             },
-        },{
+        }, {
             "label": "build_kernel",
             "type": "cargo",
             "command": "build",
@@ -31,6 +31,26 @@
                 "build-std=core,compiler_builtins,alloc",
                 "-Z",
                 "build-std-features=compiler-builtins-mem"
+            ],
+            "presentation": {
+                "showReuseMessage": false, 
+                "clear": true
+            },
+        }, {
+            "label": "build_kernel_test",
+            "type": "cargo",
+            "command": "test",
+            "args": [
+                "-p",
+                "kernel", 
+                "--target",
+                "${workspaceFolder}\\kernel\\x86_64-myos.json",
+                "-Z",
+                "build-std=core,compiler_builtins,alloc",
+                "-Z",
+                "build-std-features=compiler-builtins-mem",
+                "--all-targets",
+                "--no-run",
             ],
             "presentation": {
                 "showReuseMessage": false, 
@@ -52,33 +72,22 @@
             ],
             "isBackground": true,
         }, {
+            "label": "build_bootable_disk_image_test",
+            "type": "cargo",
+            "command": "run",
+            "args": [
+                "--bin",
+                "build-image",
+                "--",
+                "EFI/BOOT/BOOTX64.EFI->${workspaceFolder}\\target\\x86_64-unknown-uefi\\debug\\bootloader.efi;kernel-x86_64->${workspaceFolder}\\target\\x86_64-myos\\debug\\deps\\kernel-30854551d77828c5",
+                "${workspaceFolder}\\target/asos.img"
+            ],
+            "isBackground": true,
+        }, {
             "label": "run_qemu",
             "type": "shell",
             "command": "qemu-system-x86_64",
             "args": [
-                "-drive",
-                "if=pflash,format=raw,readonly=on,file=\"${workspaceFolder}\\edk2\\OVMF-pure-efi.fd\",readonly=on",
-                "-drive",
-                "format=raw,file=\"${workspaceFolder}\\target\\asos.img\"",
-                "-device", 
-                "isa-debug-exit,iobase=0xf4,iosize=0x04",
-                "-serial",
-                "stdio",
-                "-d",
-                "cpu_reset",
-                "--no-reboot"
-                
-            ],
-            "presentation": {
-                "clear": true,
-            },
-        }, {
-            "label": "run_qemu_debug",
-            "type": "shell",
-            "command": "qemu-system-x86_64",
-            "args": [
-                "-s",
-                "-S",
                 "-drive",
                 "if=pflash,format=raw,readonly=on,file=\"${workspaceFolder}\\edk2\\OVMF-pure-efi.fd\",readonly=on",
                 "-drive",
@@ -106,6 +115,10 @@
         }, {
             "label": "launch_without_building_bootloader",
             "dependsOn": ["build_kernel", "build_bootable_disk_image", "run_qemu"],
+            "dependsOrder": "sequence"
+        }, {
+            "label": "test_kernel",
+            "dependsOn": ["build_kernel_test", "build_bootable_disk_image_test", "run_qemu"],
             "dependsOrder": "sequence"
         }
     ]
