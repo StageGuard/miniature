@@ -60,6 +60,9 @@ pub struct KernelArg {
     // GlobalDescriptorTable 起始虚拟地址
     pub gdt_start_addr: u64,
 
+    // ACPI 参数
+    pub acpi: AcpiSettings,
+
     // 栈顶起始虚拟地址
     pub stack_top_addr: u64,
     // 栈大小
@@ -80,4 +83,17 @@ pub struct KernelArg {
     pub unav_phys_mem_regions_len: usize,
 
     pub tls_template: TlsTemplate
+}
+
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy)]
+pub struct AcpiSettings {
+    pub local_apic_base: usize,
+}
+
+impl Default for AcpiSettings {
+    fn default() -> Self {
+        Self { local_apic_base: Default::default() }
+    }
 }

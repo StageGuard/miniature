@@ -3,7 +3,6 @@ use acpi::rsdp::Rsdp;
 use log::{warn, info};
 use uefi::table::{cfg::{ACPI2_GUID, ACPI_GUID}, Boot, SystemTable};
 
-use crate::mem::page_allocator::boot::allocate_zeroed_page_aligned;
 
 fn validate_rsdp(address: usize) -> core::result::Result<usize, ()> {
     // paging is not enabled at this stage; we can just read the physical address here.

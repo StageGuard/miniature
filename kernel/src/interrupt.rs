@@ -26,6 +26,11 @@ extern "x86-interrupt" fn double_fault_handler(stack_frame: InterruptStackFrame,
     exit_qemu(crate::device::qemu::QemuExitCode::Failed);
 }
 
+pub unsafe fn write_idt_gate(entry_index: usize, handler: u64) {
+    let mut idt = IDT.inner_exclusive_mut();
+    idt[entry_index].set_handler_addr(VirtAddr::new(handler));
+}
+
 #[test_case]
 fn test_breakpoint_exception() {
     x86_64::instructions::interrupts::int3();

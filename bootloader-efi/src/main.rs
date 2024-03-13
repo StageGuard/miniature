@@ -4,7 +4,7 @@
 #![feature(maybe_uninit_uninit_array)]
 
 use core::mem::MaybeUninit;
-use core::ptr::{slice_from_raw_parts, NonNull};
+use core::ptr::{read_volatile, slice_from_raw_parts, write_volatile, NonNull};
 use core::slice;
 use ::acpi::fadt::Fadt;
 use ::acpi::madt::{Madt, MadtEntry};
@@ -12,7 +12,7 @@ use ::acpi::{AcpiHandler, PhysicalMapping};
 use log::{info, warn, debug};
 use mem::page_allocator::boot::allocate_zeroed_page_aligned;
 use mem::RTMemoryRegionDescriptor;
-use shared::arg::{KernelArg, MemoryRegion, MemoryRegionKind};
+use shared::arg::{AcpiSettings, KernelArg, MemoryRegion, MemoryRegionKind};
 use shared::framebuffer::Framebuffer;
 use uefi::proto::console::serial::Serial;
 use uefi::proto::media::partition::PartitionInfo;
@@ -22,8 +22,9 @@ use uefi::{entry, Handle, Status, allocator};
 use x86_64::instructions::port::Port;
 use x86_64::registers::control::{Cr0, Cr0Flags};
 use x86_64::registers::model_specific::{Efer, EferFlags, Msr};
-use x86_64::structures::paging::{Mapper, PageTableFlags};
-use x86_64::VirtAddr;
+use x86_64::structures::paging::page_table::PageTableEntry;
+use x86_64::structures::paging::{Mapper, PageTableFlags, PhysFrame, Size4KiB};
+use x86_64::{PhysAddr, VirtAddr};
 use crate::context::context_switch;
 use crate::device::partition::find_current_boot_partition;
 use crate::device::retrieve::{list_handles, ProtocolWithHandle};
@@ -98,7 +99,8 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     let boot_services = st.boot_services();
 
     // try to initialize acpi mode
-    let apic = find_acpi_table_pointer(&st).map(|(ptr, _)| unsafe {
+    let acpi_settings = find_acpi_table_pointer(&st).map(|(ptr, _)| unsafe {
+        
         let handler = UefiAcpiHandler(&st);
         let acpi_table = ::acpi::AcpiTables::from_rsdp(handler, ptr as usize)
             .or_panic("failed to parse ACPI table from RSDP");
@@ -108,15 +110,12 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
 
         if fadt.smi_cmd_port == 0 {
             warn!("System Management Mode is not supported.");
-            return
+            return Default::default()
         }
 
         let mut smi_serial = Port::new(fadt.smi_cmd_port as u16);
         smi_serial.write(fadt.acpi_enable);
-
-        info!("pm1a addr: {}", fadt.pm1a_control_block().unwrap().address);
         let mut pm1a_cb_serial: Port<u16> = Port::new(fadt.pm1a_control_block().unwrap().address as u16);
-
         // TODO: wait for 3 seconds which do as same as linux kernel
         while pm1a_cb_serial.read() & 1 == 0 {
             core::arch::asm!("hlt");
@@ -124,21 +123,29 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
 
         let madt = acpi_table.find_table::<Madt>()
             .or_panic("no MADT entry in ACPI table");
-
         let madt_entries = madt.entries();
+
+        let mut local_apic_base: Option<usize> = None;
 
         for entry in madt_entries {
             match entry {
                 MadtEntry::LocalApic(local_apic) => {
-                    let base = read_local_apic_base();
-                    info!("localapicb: {:x}", base);
+                    let flags = local_apic.flags;
+                    if flags & 3 != 0 {
+                        local_apic_base.replace(read_local_apic_base() as usize);
+                    } else {
+                        warn!("Local APIC cannot be enabled, flag: {flags}")
+                    }
+                    
                 },
                 _ => { }
             }
         }
-    });
 
-
+        AcpiSettings {
+            local_apic_base: local_apic_base.unwrap_or(0)
+        }
+    }).or_panic("ACPI is not supported on this machine.");
 
     // find partition of current loaded image.
     const PWH_UNINITIALIZED: MaybeUninit<ProtocolWithHandle<'_, PartitionInfo>> = MaybeUninit::<ProtocolWithHandle<PartitionInfo>>::uninit();
@@ -203,9 +210,15 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     let kernel_gdt = alloc_and_map_gdt_identically(&mut kernel_page_table, &mut frame_allocator);
     info!("global descriptor table virt addr: 0x{:x}", kernel_gdt.as_u64());
 
-    // map kernel pml4 table, identical map
-    // because Cr3 register is also virtual address of page table.
     unsafe {
+        // map local apic, identical map
+        let local_apic_phys_addr = PhysAddr::new(acpi_settings.local_apic_base as u64);
+        let local_apic_frame = PhysFrame::<Size4KiB>::containing_address(local_apic_phys_addr);
+        kernel_page_table.identity_map(local_apic_frame, PageTableFlags::PRESENT | PageTableFlags::WRITABLE, &mut frame_allocator)
+            .or_panic("failed to map LAPIC")
+            .ignore();
+        // map kernel pml4 table, identical map
+        // because Cr3 register is also virtual address of page table.
         kernel_page_table.identity_map(kernel_pml4_table_phys_frame, PageTableFlags::PRESENT, &mut frame_allocator)
             .or_panic("failed to map kernel pml4 table")
             .ignore();
@@ -246,7 +259,7 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         kernel_virt_space_offset:   load_kernel.kernel_virt_space_offset,
 
         gdt_start_addr:             kernel_gdt.as_u64(),
-        //acpi_table_start_addr:      
+        acpi:                       acpi_settings,
 
         stack_top_addr:             (kernel_stack_virt_addr + kernel_stack_size).align_down(16u8).as_u64(),
         stack_size:                 kernel_stack_size,

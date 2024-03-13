@@ -8,6 +8,7 @@
 
 use core::{arch::{self, asm}, fmt::Write, mem::MaybeUninit, slice};
 
+use acpi::apic::setup_apic;
 use alloc::vec::Vec;
 use device::qemu::exit_qemu;
 use gdt::init_gdt;
@@ -17,7 +18,7 @@ use log::{info, Log};
 use mem::frame_allocator::init_frame_allocator;
 use shared::{arg::KernelArg, framebuffer::{FBPixelFormat, Framebuffer}, uni_processor::UPSafeCell};
 use spin::mutex::Mutex;
-use x86_64::{instructions::{self, interrupts::int3}, VirtAddr};
+use x86_64::{instructions::{self, interrupts::{self, int3}}, VirtAddr};
 
 use crate::{framebuffer::{init_framebuffer, FRAMEBUFFER}, logger::{init_framebuffer_logger, FramebufferLogger}};
 
@@ -28,6 +29,7 @@ mod logger;
 mod framebuffer;
 mod gdt;
 mod interrupt;
+mod acpi;
 
 extern crate alloc;
 
@@ -54,6 +56,8 @@ pub extern "C" fn _start(arg: &'static KernelArg) -> ! {
     unsafe {
         init_gdt(arg.gdt_start_addr);
         init_idt();
+
+        setup_apic(arg.acpi.local_apic_base as u64);
     }
 
     halt();
