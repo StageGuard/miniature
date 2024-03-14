@@ -1,19 +1,15 @@
 use core::{mem::MaybeUninit, ptr::{read_volatile, write_volatile}};
-
+use core::fmt::Write;
 use lazy_static::lazy_static;
 use log::info;
 use shared::uni_processor::UPSafeCell;
-use x86_64::{instructions::{interrupts, port::{Port, PortGeneric, ReadWriteAccess}}, registers::model_specific::Msr, structures::idt::InterruptStackFrame};
+use x86_64::{instructions::port::{Port, PortGeneric, ReadWriteAccess}, registers::model_specific::Msr, structures::idt::InterruptStackFrame};
 
-use crate::interrupt::write_idt_gate;
+use crate::{interrupt::write_idt_gate, qemu_println};
 
 
 const IA32_APIC_BASE_MSR: u32 = 0x1B;
 const IA32_APIC_BASE_MSR_ENABLE: u64 = 0x800;
-
-lazy_static! {
-    static ref LAPIC_ACCESSOR: UPSafeCell<MaybeUninit<LApicAccessor>> = unsafe { UPSafeCell::new(MaybeUninit::uninit()) };
-}
 
 #[derive(Clone, Copy)]
 struct LApicAccessor(u64);
@@ -28,19 +24,24 @@ impl LApicAccessor {
     }
 }
 
-extern "x86-interrupt" fn isr_dummytmr_handler(stack_frame: InterruptStackFrame) {
-    unsafe {
-        let mut apic_ref = LAPIC_ACCESSOR.inner_exclusive_mut();
-        let mut apic = apic_ref.assume_init_mut().clone();
-        drop(apic_ref);
+extern "x86-interrupt" fn isr_timer_handler(stack_frame: InterruptStackFrame) {
 
-        apic.write(0xb0, 0); // EOI Register
-        info!("isr_dummytmr_handler")
-    }
+    // reset apic EOI register to proceed interrupt.
+    unsafe { write_volatile(0xfee000b0 as *mut u32, 0); }
 }
 
-extern "x86-interrupt" fn isr_spurious_handler(stack_frame: InterruptStackFrame) { 
-    info!("isr_dummytmr_handler")
+extern "x86-interrupt" fn isr_spurious_handler(stack_frame: InterruptStackFrame) { }
+
+extern "x86-interrupt" fn isr_lint0_handler(stack_frame: InterruptStackFrame) {
+    qemu_println!("LINT0 interrupt handled. {:?}", stack_frame);
+    // reset apic EOI register to proceed interrupt.
+    unsafe { write_volatile(0xfee000b0 as *mut u32, 0); }
+}
+
+extern "x86-interrupt" fn isr_lint1_handler(stack_frame: InterruptStackFrame) {
+    qemu_println!("LINT1 interrupt handled. {:?}", stack_frame);
+    // reset apic EOI register to proceed interrupt.
+    unsafe { write_volatile(0xfee000b0 as *mut u32, 0); }
 }
 
 /**
@@ -53,16 +54,14 @@ pub unsafe fn setup_apic(apic_base: u64) {
 
     let mut apic = LApicAccessor(apic_base & 0xffff0000);
 
-    let mut apic_ref = LAPIC_ACCESSOR.inner_exclusive_mut();
-    apic_ref.write(apic.clone());
-    drop(apic_ref);
-
     // disable 8259 PIC
     outb(0x21, 0xff);
     outb(0xa1, 0xff);
 
     // setup isrs
-    write_idt_gate(32, isr_dummytmr_handler as u64);
+    write_idt_gate(32, isr_timer_handler as u64);
+    write_idt_gate(33, isr_lint0_handler as u64);
+    write_idt_gate(34, isr_lint1_handler as u64);
     write_idt_gate(39, isr_spurious_handler as u64);
 
     // initialize LAPIC to a well known state
@@ -84,12 +83,11 @@ pub unsafe fn setup_apic(apic_base: u64) {
 
     // map APIC timer to an interrupt, and by that enable it in one-shot mode
     apic.write(0x320, 0x20); // LVT Timer Register
-    // set up divide value to 16
-    apic.write(0x3e0, 0b111); // Divide Configuration Register
+    // set up divide value to 1
+    apic.write(0x3e0, 0xb); // Divide Configuration Register
 
     // initialize PIT Ch 2 in one-shot mode
-    // waiting 1 sec could slow down boot time considerably,
-    // so we'll wait 1/100 sec, and multiply the counted ticks
+    // PIT has fixed frequency 1193182 Hz, so let PIT ch2 tick 10ms.
     outb(0x61, (inb(0x61) & 0xfd) | 1);
     outb(0x43, 0b10110010);
 
@@ -114,15 +112,18 @@ pub unsafe fn setup_apic(apic_base: u64) {
     apic.write(0x320, 0x10000); // LVT Timer Register
 
     // 0x390 = Current Count Register (for Timer)
-    let ccr = apic.read(0x390);
-    let freq: u32 = 0xffffffff - ccr;
-    info!("freq: {:} Hz", freq * 100);
+    let lapic_ticks_in_10_ms: u32 = 0xffffffff - apic.read(0x390);
 
     // apply freq
     // 0x2000 = periodic mode
     apic.write(0x320, 0x20 | 0x20000); // LVT Timer Register
-    apic.write(0x3e0, 0b111); // Divide Configuration Register
-    apic.write(0x380, freq); // Initial Count Register (for Timer)
+    apic.write(0x3e0, 0xb); // Divide Configuration Register
+    // let apic timer send irq every 1ms
+    apic.write(0x380, lapic_ticks_in_10_ms / 10); // Initial Count Register (for Timer)
+
+    info!("LAPIC initialized, CPU bus frequency: {:} Hz", lapic_ticks_in_10_ms * 100);
+
+    
 }
 
 

@@ -11,7 +11,7 @@ use core::{arch::{self, asm}, fmt::Write, mem::MaybeUninit, slice};
 use acpi::apic::setup_apic;
 use alloc::vec::Vec;
 use device::qemu::exit_qemu;
-use gdt::init_gdt;
+use gdt::init_gdt_and_protected_mode;
 use interrupt::init_idt;
 use lazy_static::lazy_static;
 use log::{info, Log};
@@ -40,13 +40,8 @@ pub extern "C" fn _start(arg: &'static KernelArg) -> ! {
     test_main();
 
     init_framebuffer(arg);
-    {
-        let framebuffer = FRAMEBUFFER.inner_exclusive_mut();
-        let framebuffer = framebuffer.lock();
-        let framebuffer = unsafe { framebuffer.assume_init_ref() };
-        init_framebuffer_logger(unsafe { &*(framebuffer as *const Framebuffer) });
-        info!("kernel framebuffer logger is initialized.");
-    }
+    init_framebuffer_logger();
+
     init_frame_allocator(
         VirtAddr::new(arg.phys_mem_mapped_addr),
         arg.phys_mem_size,
@@ -54,10 +49,13 @@ pub extern "C" fn _start(arg: &'static KernelArg) -> ! {
     );
 
     unsafe {
-        init_gdt(arg.gdt_start_addr);
+        init_gdt_and_protected_mode(arg.gdt_start_addr);
         init_idt();
 
         setup_apic(arg.acpi.local_apic_base as u64);
+        interrupts::enable();
+
+        
     }
 
     halt();

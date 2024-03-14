@@ -198,7 +198,7 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         // Enable support for the no-execute bit in page tables.
         Efer::update(|efer| *efer |= EferFlags::NO_EXECUTE_ENABLE );
         // Make the kernel respect the write-protection bits even when in ring 0 by default
-        Cr0::update(|cr0| *cr0 |= Cr0Flags::WRITE_PROTECT);
+        Cr0::update(|cr0| *cr0 |= Cr0Flags::WRITE_PROTECT | Cr0Flags::PROTECTED_MODE_ENABLE);
     };
 
     // 加载内核到内核的 PML4 页表里，加载到四级页表的最后一个表项的起始，0xffff_ff80_0000_0000

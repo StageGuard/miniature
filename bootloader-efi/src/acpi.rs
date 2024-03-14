@@ -1,6 +1,4 @@
-use core::slice::{self, from_raw_parts};
 use acpi::rsdp::Rsdp;
-use log::{warn, info};
 use uefi::table::{cfg::{ACPI2_GUID, ACPI_GUID}, Boot, SystemTable};
 
 
