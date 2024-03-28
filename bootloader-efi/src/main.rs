@@ -11,8 +11,9 @@ use ::acpi::madt::{Madt, MadtEntry};
 use ::acpi::{AcpiHandler, PhysicalMapping};
 use log::{info, warn, debug};
 use mem::page_allocator::boot::allocate_zeroed_page_aligned;
+use mem::tracked_mapper::TrackedMapper;
 use mem::RTMemoryRegionDescriptor;
-use shared::arg::{AcpiSettings, KernelArg, MemoryRegion, MemoryRegionKind};
+use shared::arg::{AcpiSettings, KernelArg, MemoryRegion, MemoryRegionKind, MAX_CPUS};
 use shared::framebuffer::Framebuffer;
 use uefi::proto::console::serial::Serial;
 use uefi::proto::media::partition::PartitionInfo;
@@ -23,7 +24,7 @@ use x86_64::instructions::port::Port;
 use x86_64::registers::control::{Cr0, Cr0Flags};
 use x86_64::registers::model_specific::{Efer, EferFlags, Msr};
 use x86_64::structures::paging::page_table::PageTableEntry;
-use x86_64::structures::paging::{Mapper, PageTableFlags, PhysFrame, Size4KiB};
+use x86_64::structures::paging::{Mapper, OffsetPageTable, PageSize, PageTableFlags, PhysFrame, Size4KiB};
 use x86_64::{PhysAddr, VirtAddr};
 use crate::context::context_switch;
 use crate::device::partition::find_current_boot_partition;
@@ -34,9 +35,8 @@ use crate::kernel::load_kernel_to_virt_mem;
 use crate::mem::frame_allocator::LinearIncFrameAllocator;
 use crate::mem::page_allocator;
 use crate::mem::runtime_map::{
-    alloc_and_map_gdt_identically, 
-    alloc_and_map_kernel_stack, 
-    map_context_switch_identically, 
+    init_gdt, 
+    alloc_and_map_kernel_stack,
     map_framebuffer, map_kernel_arg, 
     map_physics_memory
 };
@@ -127,12 +127,16 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
 
         let mut local_apic_base: Option<usize> = None;
 
+        let mut lapics: [[u8; 2]; MAX_CPUS] = [Default::default(); MAX_CPUS];
+        let mut lapic_count = 0;
+
         for entry in madt_entries {
             match entry {
                 MadtEntry::LocalApic(local_apic) => {
                     let flags = local_apic.flags;
                     if flags & 3 != 0 {
-                        local_apic_base.replace(read_local_apic_base() as usize);
+                        lapics[lapic_count] = [local_apic.apic_id, local_apic.processor_id];
+                        lapic_count += 1;
                     } else {
                         warn!("Local APIC cannot be enabled, flag: {flags}")
                     }
@@ -142,8 +146,14 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
             }
         }
 
+        if lapic_count != 0 {
+            local_apic_base.replace(read_local_apic_base() as usize);
+        }
+
         AcpiSettings {
-            local_apic_base: local_apic_base.unwrap_or(0)
+            local_apic_base: local_apic_base.unwrap_or(0),
+            local_apic: lapics.clone(),
+            local_apic_count: lapic_count
         }
     }).or_panic("ACPI is not supported on this machine.");
 
@@ -194,6 +204,14 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     let (mut kernel_page_table, kernel_pml4_table_phys_frame) = 
         page_allocator::runtime::create_page_table(&mut frame_allocator, VirtAddr::new(0));
 
+    // 映射帧分配器可用的地址空间（也就是物理内存地址空间）到内核页表
+    let mapped_phys_space_virt_addr = map_physics_memory(
+        frame_allocator.max_phys_addr(), 
+        &mut kernel_page_table, 
+        &mut frame_allocator
+    );
+    info!("kernel mapped all physics address space to virt addr: 0x{:x}", mapped_phys_space_virt_addr);
+
     unsafe {
         // Enable support for the no-execute bit in page tables.
         Efer::update(|efer| *efer |= EferFlags::NO_EXECUTE_ENABLE );
@@ -207,31 +225,14 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     info!("kernel entry virt addr: 0x{:x}", load_kernel.kernel_entry.as_u64());
 
     // map gdt, identical map
-    let kernel_gdt = alloc_and_map_gdt_identically(&mut kernel_page_table, &mut frame_allocator);
-    info!("global descriptor table virt addr: 0x{:x}", kernel_gdt.as_u64());
-
-    unsafe {
-        // map local apic, identical map
-        let local_apic_phys_addr = PhysAddr::new(acpi_settings.local_apic_base as u64);
-        let local_apic_frame = PhysFrame::<Size4KiB>::containing_address(local_apic_phys_addr);
-        kernel_page_table.identity_map(local_apic_frame, PageTableFlags::PRESENT | PageTableFlags::WRITABLE, &mut frame_allocator)
-            .or_panic("failed to map LAPIC")
-            .ignore();
-        // map kernel pml4 table, identical map
-        // because Cr3 register is also virtual address of page table.
-        kernel_page_table.identity_map(kernel_pml4_table_phys_frame, PageTableFlags::PRESENT, &mut frame_allocator)
-            .or_panic("failed to map kernel pml4 table")
-            .ignore();
-    }
+    let kernel_gdt = init_gdt(&mut kernel_page_table, &mut frame_allocator);
+    info!("global descriptor table virt addr: 0x{:x}", kernel_gdt.start_address().as_u64());
 
     // 创建内核栈并加载到内核 PML4 页表
     let kernel_stack_size = 4096 * 128; // 128 KiB
     let kernel_stack_virt_addr = alloc_and_map_kernel_stack(kernel_stack_size, &mut kernel_page_table, &mut frame_allocator);
     info!("kernel stack virt addr: 0x{:x}", kernel_stack_virt_addr.as_u64());
     let kernel_stack_top_virt_addr = (kernel_stack_virt_addr + kernel_stack_size).align_down(16u8).as_u64();
-
-    let context_switch_virt_addr = map_context_switch_identically(context_switch as *const fn(), &mut kernel_page_table, &mut frame_allocator);
-    info!("mapped context switch fn to virt addr: 0x{:x}", context_switch_virt_addr.as_u64());
 
     // map framebuffer to kernel virt addr
     let framebuffer_virt_addr = framebuffer.map(|f| {
@@ -245,20 +246,20 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         framebuffer_virt_addr
     });
 
-    // 映射帧分配器可用的地址空间（也就是物理内存地址空间）到内核页表
-    let mapped_phys_space_virt_addr = map_physics_memory(
-        frame_allocator.max_phys_addr(), 
-        &mut kernel_page_table, 
-        &mut frame_allocator
+    let regions = construct_unsafe_phys_mem_region_map(
+        &memory_map, 
+        &frame_allocator, 
+        &framebuffer, 
+        &kernel,
+        acpi_settings.local_apic_base as u64,
+        kernel_pml4_table_phys_frame,
+        kernel_gdt
     );
-    info!("kernel mapped all physics address space to virt addr: 0x{:x}", mapped_phys_space_virt_addr);
-
-    let regions = construct_unsafe_phys_mem_region_map(&memory_map, &frame_allocator, &framebuffer, &kernel);
     // 创建内核参数，把这些参数传给内核来让内核读取一些信息
     let kernel_arg = KernelArg {
         kernel_virt_space_offset:   load_kernel.kernel_virt_space_offset,
 
-        gdt_start_addr:             kernel_gdt.as_u64(),
+        gdt_start_addr:             kernel_gdt.start_address().as_u64(),
         acpi:                       acpi_settings,
 
         stack_top_addr:             (kernel_stack_virt_addr + kernel_stack_size).align_down(16u8).as_u64(),
@@ -314,7 +315,10 @@ fn construct_unsafe_phys_mem_region_map<I: ExactSizeIterator<Item = MemoryDescri
     memory_map: &MemoryMap,
     frame_allocator: &LinearIncFrameAllocator<I, MemoryDescriptor>,
     framebuffer: &Option<Framebuffer>,
-    kernel_bytes: &[u8]
+    kernel_bytes: &[u8],
+    lapic_base: u64,
+    kernel_pml4_table_phys_frame: PhysFrame,
+    gdt_frame: PhysFrame,
 ) -> ([MaybeUninit<MemoryRegion>; 512], usize) {
     let mut regions: [MaybeUninit<MemoryRegion>; 512] = MaybeUninit::uninit_array();
     let mut curr_idx = 0;
@@ -345,6 +349,7 @@ fn construct_unsafe_phys_mem_region_map<I: ExactSizeIterator<Item = MemoryDescri
         curr_idx += 1;
     });
 
+    // 内核 elf
     let kernel_bytes_starst_phys_addr = &kernel_bytes[0] as *const _ as u64;
     regions[curr_idx].write(MemoryRegion {
         start: kernel_bytes_starst_phys_addr,
@@ -352,6 +357,31 @@ fn construct_unsafe_phys_mem_region_map<I: ExactSizeIterator<Item = MemoryDescri
         kind: MemoryRegionKind::Bootloader
     });
     curr_idx += 1;
+
+    // local apic
+    regions[curr_idx].write(MemoryRegion {
+        start: lapic_base,
+        length: Size4KiB::SIZE,
+        kind: MemoryRegionKind::Bootloader
+    });
+    curr_idx += 1;
+
+    // kernel page table
+    regions[curr_idx].write(MemoryRegion {
+        start: kernel_pml4_table_phys_frame.start_address().as_u64(),
+        length: Size4KiB::SIZE,
+        kind: MemoryRegionKind::Bootloader
+    });
+    curr_idx += 1;
+
+    // gdt
+    regions[curr_idx].write(MemoryRegion {
+        start: gdt_frame.start_address().as_u64(),
+        length: Size4KiB::SIZE,
+        kind: MemoryRegionKind::Bootloader
+    });
+    curr_idx += 1;
+
 
     (regions, curr_idx)
 }

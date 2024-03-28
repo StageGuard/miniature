@@ -4,8 +4,12 @@ use core::fmt::Write;
 #[cfg(not(test))]
 #[panic_handler]
 fn panic_handler(info: &PanicInfo) -> ! {
-    loop {
+    use log::error;
+    use crate::halt;
 
+    error!("kernel panic: {:?}", info);
+    loop {
+        halt();
     }
 }
 

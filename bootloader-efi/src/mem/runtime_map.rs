@@ -42,31 +42,11 @@ pub fn alloc_and_map_kernel_stack(
     kernel_stack_start_page.start_address() + 4096u64
 }
 
-// create context switch function map indentically
-pub fn map_context_switch_identically(
-    context_switch: *const fn(),
-    kernel_pml4_table: &mut TrackedMapper<OffsetPageTable>,
-    frame_allocator: &mut impl FrameAllocator<Size4KiB>
-) -> VirtAddr {
-    let fn_phys_frame: PhysFrame<Size4KiB> = PhysFrame::containing_address(PhysAddr::new(context_switch as u64));
-    
-    for frame in PhysFrame::range_inclusive(fn_phys_frame, fn_phys_frame + 1) {
-        unsafe {
-            kernel_pml4_table
-                .identity_map(frame, PTFlags::PRESENT, frame_allocator)
-                .or_panic("failed to identity map kernel pml4 table.")
-                .flush();
-        }
-    }
-    
-    VirtAddr::new(context_switch as u64)
-}
-
 // create and map gdt
-pub fn alloc_and_map_gdt_identically(
+pub fn init_gdt(
     kernel_pml4_table: &mut TrackedMapper<OffsetPageTable>,
     frame_allocator: &mut impl FrameAllocator<Size4KiB>
-) -> VirtAddr {
+) -> PhysFrame {
     let gdt_phys_frame = frame_allocator
         .allocate_frame()
         .or_panic("failed to allocate new physics frame for global descriptor table.");
@@ -89,13 +69,7 @@ pub fn alloc_and_map_gdt_identically(
         SS::set_reg(data_selector);
     }
 
-    unsafe {
-        kernel_pml4_table
-            .identity_map(gdt_phys_frame, PTFlags::PRESENT | PTFlags::WRITABLE, frame_allocator)
-            .or_panic("failed to identity map new allocated global descriptor table.")
-            .flush();
-    }
-    VirtAddr::new(gdt_phys_frame.start_address().as_u64())
+    gdt_phys_frame
 }
 
 pub fn map_framebuffer(
@@ -143,7 +117,7 @@ pub fn map_physics_memory(
 
     info!("physics address space size: {}", max_phys_addr.as_u64());
 
-    let available_p4pti = kernel_pml4_table.find_free_space_and_mark(max_phys_addr.as_u64() as usize, true)
+    let available_p4pti = kernel_pml4_table.find_free_space_and_mark(max_phys_addr.as_u64() as usize, false)
         .or_panic("failed to get available pml4 entry for full physics address space, maybe it run out");
     let phys_start_page = Page::from_page_table_indices_1gib(available_p4pti.0,  PageTableIndex::new(0));
 

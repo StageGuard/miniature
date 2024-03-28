@@ -88,6 +88,8 @@
             "type": "shell",
             "command": "qemu-system-x86_64",
             "args": [
+                "-smp",
+                "4",
                 "-drive",
                 "if=pflash,format=raw,readonly=on,file=\"${workspaceFolder}\\edk2\\OVMF-pure-efi.fd\",readonly=on",
                 "-drive",
@@ -96,6 +98,8 @@
                 "isa-debug-exit,iobase=0xf4,iosize=0x04",
                 "-serial",
                 "stdio",
+                "-m",
+                "1024M",
                 "-d",
                 "cpu_reset",
                 "--no-reboot"

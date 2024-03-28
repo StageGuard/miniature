@@ -1,5 +1,7 @@
 use core::{fmt::{self, Debug}, mem::MaybeUninit};
 
+pub const MAX_CPUS: usize = 256;
+
 #[derive(Debug, Clone, Copy)]
 #[repr(C)]
 pub struct MemoryRegion {
@@ -90,10 +92,16 @@ pub struct KernelArg {
 #[derive(Debug, Clone, Copy)]
 pub struct AcpiSettings {
     pub local_apic_base: usize,
+    pub local_apic: [[u8; 2]; MAX_CPUS],
+    pub local_apic_count: usize,
 }
 
 impl Default for AcpiSettings {
     fn default() -> Self {
-        Self { local_apic_base: Default::default() }
+        Self {
+            local_apic_base: Default::default(),
+            local_apic: [Default::default(); MAX_CPUS],
+            local_apic_count: Default::default()
+        }
     }
 }

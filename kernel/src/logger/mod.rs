@@ -7,17 +7,17 @@ use lazy_static::lazy_static;
 use crate::{device::qemu::exit_qemu, framebuffer::FRAMEBUFFER, qemu_println};
 
 lazy_static! {
-    static ref FRAMEBUFFER_LOGGER: UPSafeCell<MaybeUninit<FramebufferLogger<'static>>> = unsafe { UPSafeCell::new(MaybeUninit::uninit()) };
+    pub static ref FRAMEBUFFER_LOGGER: UPSafeCell<MaybeUninit<FramebufferLogger<'static>>> = unsafe { UPSafeCell::new(MaybeUninit::uninit()) };
 }
 
 pub struct FramebufferLogger<'a> {
-    writter: Mutex<FrameBufferWriter<'a>>,
+    pub writer: Mutex<FrameBufferWriter<'a>>,
 }
 
 impl <'a> FramebufferLogger<'a> {
     pub fn new(framebuffer: &'a Framebuffer) -> Self {
         Self {
-            writter: Mutex::new(FrameBufferWriter::new(framebuffer))
+            writer: Mutex::new(FrameBufferWriter::new(framebuffer))
         }
     }
 }
@@ -28,7 +28,7 @@ impl log::Log for FramebufferLogger<'_> {
     }
 
     fn log(&self, record: &log::Record) {
-        let mut fb_writter = self.writter.lock();
+        let mut fb_writter = self.writer.lock();
         
         let _ = writeln!(fb_writter, "{:5}: {}", record.level(), record.args());
     }

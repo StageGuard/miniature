@@ -29,7 +29,8 @@ where
     /// library assumes that references can never point to virtual address `0`.  
     pub fn new(memory_map: I) -> Self {
         // skip frame 0 because the rust core library does not see 0 as a valid address
-        let start_frame = PhysFrame::containing_address(PhysAddr::new(0x1000));
+        // skip real-mode physical address space
+        let start_frame = PhysFrame::containing_address(PhysAddr::new(0x100000));
         Self::new_starting_at(start_frame, memory_map)
     }
 

@@ -14,6 +14,8 @@ x86_64 = { version = "0.14.7", default-features = false, features = [
     "inline_asm",
 ] }
 uart_16550 = "0.2.18"
+pc-keyboard = "0.7.0"
+raw-cpuid = "10.2.0"
 
 noto-sans-mono-bitmap = { version = "0.2.0", default-features = false, features = [
     "regular",

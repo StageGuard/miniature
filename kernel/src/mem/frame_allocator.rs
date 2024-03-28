@@ -1,11 +1,9 @@
-use core::{mem::{transmute, MaybeUninit}, ops::Range, fmt::Write};
+use core::{mem::{transmute, MaybeUninit}, ops::Range};
 use lazy_static::lazy_static;
-use log::error;
+use log::{error, info};
 use shared::{arg::MemoryRegion, print_panic::PrintPanic, uni_processor::UPSafeCell};
 use spin::Mutex;
 use x86_64::{align_up, structures::paging::{FrameAllocator, PhysFrame, Size4KiB}, PhysAddr, VirtAddr};
-
-use crate::qemu_println;
 
 const MAX_RANGE_COUNT: usize = 512;
 
@@ -17,6 +15,7 @@ pub struct LinearIncFrameAllocator {
     range_iterator: LinkedRangeIterator,
     base_address: u64,
     phys_mem_right_boundary: u64,
+    window: u64
 }
 
 impl LinearIncFrameAllocator {
@@ -26,32 +25,38 @@ impl LinearIncFrameAllocator {
         phys_mem_size: u64,
         unav_regions: &[MemoryRegion]
     ) -> Self {
-        let iter = LinkedRangeIterator::from_memory_regions(0x1000, window, unav_regions);
+        // skip real-mode address space
+        let iter = LinkedRangeIterator::from_memory_regions(0x100000, window, unav_regions);
 
         Self { 
             range_iterator: iter, 
             base_address: phys_start_addr.as_u64(), 
-            phys_mem_right_boundary: phys_start_addr.as_u64() + phys_mem_size 
+            phys_mem_right_boundary: phys_start_addr.as_u64() + phys_mem_size,
+            window
         }
     }
 
-    fn next(&mut self) -> Option<u64> {
-        self.range_iterator.next()
+    fn next_n(&mut self, count: usize) -> Option<u64> {
+        self.range_iterator.next_n(count)
     }
-}
 
-unsafe impl FrameAllocator<Size4KiB> for LinearIncFrameAllocator {
-    fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
-        let phys_addr = self.next()?;
+    pub fn allocate_frames(&mut self, count: usize) -> Option<PhysFrame<Size4KiB>> {
+        let phys_addr = self.next_n(count)?;
 
         // out of memory
-        if phys_addr + 0x1000 > self.phys_mem_right_boundary {
-            error!("out of memory");
+        if phys_addr + self.window * count as u64 > self.phys_mem_right_boundary {
+            error!("out of memory while allocating {} bytes", self.window * count as u64);
             return None
         }
 
         let phys_addr = PhysAddr::new(self.base_address + phys_addr);
         Some(PhysFrame::containing_address(phys_addr))
+    }
+}
+
+unsafe impl FrameAllocator<Size4KiB> for LinearIncFrameAllocator {
+    fn allocate_frame(&mut self) -> Option<PhysFrame<Size4KiB>> {
+        self.allocate_frames(1)
     }
 }
 
@@ -70,34 +75,7 @@ impl Iterator for LinkedRangeIterator {
     type Item = u64;
 
     fn next(&mut self) -> Option<Self::Item> {
-        let mut curr = self.current_value;
-
-        // iterates over the last range.
-        if self.current_range_index == self.range_size {
-            self.current_value += self.window;
-            return Some(self.current_value);
-        }
-
-        // if not overlapped with next range.
-        if curr + self.window < self.ranges[self.current_range_index].start {
-            self.current_value += self.window;
-            return Some(self.current_value);
-        }
-
-        let mut overlapped = true;
-
-        while overlapped && self.current_range_index < self.range_size {
-            let current_range = &self.ranges[self.current_range_index];
-            curr = self.next_windowed_after(curr, current_range.end);
-
-            self.current_range_index += 1;
-
-            let next_range = &self.ranges[self.current_range_index];
-            overlapped = next_range.contains(&curr);
-        }
-
-        self.current_value = curr;
-        Some(curr)
+        self.next_n(1)
     }
 }
 
@@ -154,12 +132,51 @@ impl LinkedRangeIterator {
 
     /// next windowed value after right boundary.
     /// `neg_offset` should be smaller than `self.window`
-    fn next_windowed_after(&self, start: u64, range_right: u64) -> u64 {
+    fn next_windowed_after(start: u64, window: u64, range_right: u64) -> u64 {
         if start >= range_right {
             panic!("start should be smaller than range_right, start = {start}, range_right = {range_right}");
         }
 
-        align_up(range_right - start, self.window) + start
+        // TODO: impl with O(1) algorithm
+        let mut curr = start;
+        while curr < range_right {
+            curr += window;
+        }
+
+        return curr;
+    }
+
+    fn next_n(&mut self, count: usize) -> Option<u64> {
+        let mut curr = self.current_value;
+
+        let required_size = self.window * count as u64;
+
+        // iterates over the last range.
+        if self.current_range_index == self.range_size {
+            self.current_value += required_size;
+            return Some(self.current_value);
+        }
+
+        // if not overlapped with next range.
+        if curr + required_size < self.ranges[self.current_range_index].start {
+            self.current_value += required_size;
+            return Some(self.current_value);
+        }
+
+        let mut overlapped = true;
+
+        while overlapped && self.current_range_index < self.range_size {
+            let current_range = &self.ranges[self.current_range_index];
+            curr = Self::next_windowed_after(curr, required_size, current_range.end);
+
+            self.current_range_index += 1;
+
+            let next_range = &self.ranges[self.current_range_index];
+            overlapped = next_range.contains(&curr);
+        }
+
+        self.current_value = curr;
+        Some(curr)
     }
 }
 
@@ -176,7 +193,7 @@ pub fn init_frame_allocator(
 }
 
 /// use global frame allocator, without put off its clothes.
-pub fn with_frame_alloc<R : Sized>(f: fn(&mut LinearIncFrameAllocator) -> R) -> R {
+pub fn with_frame_alloc<R : Sized>(f: impl FnOnce(&mut LinearIncFrameAllocator) -> R) -> R {
     let global_alloc = FRAME_ALLOCATOR.inner_exclusive_mut();
     let mut locked = global_alloc.lock();
     
@@ -185,7 +202,12 @@ pub fn with_frame_alloc<R : Sized>(f: fn(&mut LinearIncFrameAllocator) -> R) -> 
 
 /// allocate a new phys frame
 pub fn frame_alloc() -> Option<PhysFrame> {
-    with_frame_alloc(|alloc| alloc.allocate_frame())
+    with_frame_alloc(|alloc: &mut LinearIncFrameAllocator| alloc.allocate_frame())
+}
+
+// allocate new phys frames
+pub fn frame_alloc_n(count: usize) -> Option<PhysFrame> {
+    with_frame_alloc(|alloc: &mut LinearIncFrameAllocator| { alloc.allocate_frames(count) })
 }
 
 /// deallocate this phys frame
@@ -194,7 +216,7 @@ pub fn frame_dealloc(frame: PhysFrame) {
 }
 
 #[test_case]
-pub(super) fn test_iterator() {
+pub(super) fn test_frame_alloc_iterator() {
     let test_unav_mem_regs = [
         MemoryRegion { start: 0x1000 + 0x2000, length: 0x1500, kind: shared::arg::MemoryRegionKind::Bootloader },
         MemoryRegion { start: 0x1000 + 0x4500, length: 0x1500, kind: shared::arg::MemoryRegionKind::Bootloader },
