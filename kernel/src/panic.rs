@@ -1,5 +1,6 @@
 use core::panic::PanicInfo;
-use core::fmt::Write;
+use crate::errorhart;
+
 
 #[cfg(not(test))]
 #[panic_handler]
@@ -7,7 +8,7 @@ fn panic_handler(info: &PanicInfo) -> ! {
     use log::error;
     use crate::halt;
 
-    error!("kernel panic: {:?}", info);
+    errorhart!("kernel panic: {:?}", info);
     loop {
         halt();
     }

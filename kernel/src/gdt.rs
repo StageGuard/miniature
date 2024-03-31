@@ -1,14 +1,13 @@
-use core::mem::{size_of, MaybeUninit};
+use core::mem::{size_of};
 
-use lazy_static::lazy_static;
+
 use log::info;
-use shared::uni_processor::UPSafeCell;
-use x86_64::{instructions::{self, interrupts, tables::load_tss}, registers::{control::{Cr0, Cr0Flags}, segmentation::{Segment, CS, DS, ES, GS, SS}}, structures::{gdt::{Descriptor, DescriptorFlags, GlobalDescriptorTable, SegmentSelector}, tss::TaskStateSegment}, VirtAddr};
 
-use crate::{arch_spec::msr::wrmsr, mem::{frame_allocator::{frame_alloc, frame_alloc_n}, PAGE_SIZE}};
+use x86_64::{instructions::{tables::load_tss}, registers::{control::{Cr0, Cr0Flags}, segmentation::{Segment, CS, DS, ES, GS, SS}}, structures::{gdt::{Descriptor, DescriptorFlags, GlobalDescriptorTable, SegmentSelector}, tss::TaskStateSegment}, VirtAddr};
+
+use crate::{arch_spec::msr::wrmsr, cpu::LogicalCpuId, infohart, loghart, mem::{frame_allocator::{frame_alloc_n}, PAGE_SIZE}};
 
 const STACK_SIZE: usize = 10 * 0x1000; // 10 KiB
-pub const DOUBLE_FAULT_IST_INDEX: u16 = 0;
 const IOBITMAP_SIZE: u32 = 65536 / 8;
 
 // TODO: each cpu should has its own interrupt stack
@@ -21,6 +20,7 @@ pub struct ProcessorControlRegion {
     pub user_rsp_tmp: usize,
     pub gdt: GlobalDescriptorTable,
     pub _percpu: (),
+    pub cpu_id: u8,
     _rsvd: Align,
     pub tss: TaskStateSegment,
 
@@ -36,9 +36,7 @@ struct Align([usize; 2]);
 
 
 // from redox-os kernel
-pub unsafe fn init_gdt(kernel_stack_top: u64) {
-    interrupts::disable();
-
+pub unsafe fn init_gdt(cpu_id: LogicalCpuId, kernel_stack_top: u64) {
     let pcr = &mut *(frame_alloc_n(size_of::<ProcessorControlRegion>().div_ceil(PAGE_SIZE))
         .expect("failed to allocate phys farme for ProcessorControlRegion")
         .start_address().as_u64() as *mut ProcessorControlRegion);
@@ -47,7 +45,6 @@ pub unsafe fn init_gdt(kernel_stack_top: u64) {
     pcr.gdt = GlobalDescriptorTable::new();
 
     pcr.tss = TaskStateSegment::new();
-    pcr.tss.interrupt_stack_table[DOUBLE_FAULT_IST_INDEX as usize] = VirtAddr::new(DOUBLE_FAULT_STACK.as_ptr() as u64) + STACK_SIZE;
     pcr.tss.privilege_stack_table[0] = VirtAddr::new(kernel_stack_top);
 
     pcr.tss.iomap_base = 0xffff;
@@ -60,7 +57,6 @@ pub unsafe fn init_gdt(kernel_stack_top: u64) {
     pcr.gdt.add_entry(Descriptor::user_code_segment()); // GDT[4] = USER_CODE
     pcr.gdt.add_entry(Descriptor::user_data_segment()); // GDT[5] = USER_DATE
     let tss_selector = pcr.gdt.add_entry(Descriptor::tss_segment(&pcr.tss)); // GDT[6.=7] = TSS
-
 
     pcr.gdt.load_unsafe();
     
@@ -80,4 +76,16 @@ pub unsafe fn init_gdt(kernel_stack_top: u64) {
 
     Cr0::update(|cr0| *cr0 |= Cr0Flags::PROTECTED_MODE_ENABLE);
 
+    pcr.cpu_id = cpu_id.0;
+
+    infohart!("global descriptor table is initialized, pcr base: 0x{:x}", pcr as *const _ as u64);
+}
+
+pub unsafe fn pcr() -> *mut ProcessorControlRegion {
+    // Primitive benchmarking of RDFSBASE and RDGSBASE in userspace, appears to indicate that
+    // obtaining FSBASE/GSBASE using mov gs:[gs_self_ref] is faster than using the (probably
+    // microcoded) instructions.
+    let mut ret: *mut ProcessorControlRegion;
+    core::arch::asm!("mov {}, gs:[{}]", out(reg) ret, const(core::mem::offset_of!(ProcessorControlRegion, self_ref)));
+    ret
 }

@@ -1,10 +1,12 @@
-use log::{info, Log};
+use alloc::format;
+use log::{info, Log, log};
 use shared::{framebuffer::Framebuffer, framebuffer_writer::FrameBufferWriter, uni_processor::UPSafeCell};
 use spin::Mutex;
-use core::{fmt::Write, mem::MaybeUninit, slice};
+use core::{fmt::Write, mem::MaybeUninit};
 use lazy_static::lazy_static;
 
 use crate::{device::qemu::exit_qemu, framebuffer::FRAMEBUFFER, qemu_println};
+use crate::gdt::pcr;
 
 lazy_static! {
     pub static ref FRAMEBUFFER_LOGGER: UPSafeCell<MaybeUninit<FramebufferLogger<'static>>> = unsafe { UPSafeCell::new(MaybeUninit::uninit()) };
@@ -30,12 +32,40 @@ impl log::Log for FramebufferLogger<'_> {
     fn log(&self, record: &log::Record) {
         let mut fb_writter = self.writer.lock();
         
-        let _ = writeln!(fb_writter, "{:5}: {}", record.level(), record.args());
+        let _ = writeln!(fb_writter, "[{:5}]{}", record.level(), record.args());
     }
 
     fn flush(&self) {
         
     }
+}
+
+#[macro_export]
+macro_rules! loghart {
+    ($lvl:expr, $($arg:tt)+) => {
+        ::log::log!($lvl, concat!("[#{}] {}"), unsafe { (*crate::gdt::pcr()).cpu_id }, format_args!($($arg)+))
+    };
+    ($lvl:expr, target: $target:expr, $($arg:tt)+) => {
+        ::log::log!(concat!("[#{}] ", target: $target), $lvl, unsafe { (*crate::gdt::pcr()).cpu_id }, $($arg)+)
+    };
+}
+
+#[macro_export]
+macro_rules! infohart {
+    ($($arg:tt)+) => ($crate::loghart!(::log::Level::Info, $($arg)+));
+    ($target:expr, $($arg:tt)+) => ($crate::loghart!(::log::Level::Info, $target, $($arg)+));
+}
+
+#[macro_export]
+macro_rules! warnhart {
+    ($($arg:tt)+) => ($crate::loghart!(::log::Level::Warn, $($arg)+));
+    ($target:expr, $($arg:tt)+) => ($crate::loghart!(::log::Level::Warn, $target, $($arg)+));
+}
+
+#[macro_export]
+macro_rules! errorhart {
+    ($($arg:tt)+) => ($crate::loghart!(::log::Level::Error, $($arg)+));
+    ($target:expr, $($arg:tt)+) => ($crate::loghart!(::log::Level::Error, $target, $($arg)+));
 }
 
 pub fn init_framebuffer_logger() {

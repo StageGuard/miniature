@@ -62,6 +62,9 @@ pub struct KernelArg {
     // GlobalDescriptorTable 起始虚拟地址
     pub gdt_start_addr: u64,
 
+    // 内核四级页表地址
+    pub kernel_pml4_start_addr: u64,
+
     // ACPI 参数
     pub acpi: AcpiSettings,
 

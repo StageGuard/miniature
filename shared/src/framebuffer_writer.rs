@@ -18,7 +18,7 @@ pub struct FrameBufferWriter<'a> {
 
     curr_x_pos: usize,
     curr_y_pos: usize,
-    
+
 }
 
 impl <'a> FrameBufferWriter<'a> {

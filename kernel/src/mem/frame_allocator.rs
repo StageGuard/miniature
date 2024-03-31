@@ -1,9 +1,9 @@
 use core::{mem::{transmute, MaybeUninit}, ops::Range};
 use lazy_static::lazy_static;
 use log::{error, info};
-use shared::{arg::MemoryRegion, print_panic::PrintPanic, uni_processor::UPSafeCell};
+use shared::{arg::MemoryRegion, uni_processor::UPSafeCell};
 use spin::Mutex;
-use x86_64::{align_up, structures::paging::{FrameAllocator, PhysFrame, Size4KiB}, PhysAddr, VirtAddr};
+use x86_64::{structures::paging::{FrameAllocator, PhysFrame, Size4KiB}, PhysAddr, VirtAddr};
 
 const MAX_RANGE_COUNT: usize = 512;
 
@@ -190,6 +190,8 @@ pub fn init_frame_allocator(
     let global_alloc: core::cell::RefMut<'_, spin::mutex::Mutex<MaybeUninit<LinearIncFrameAllocator>>> = FRAME_ALLOCATOR.inner_exclusive_mut();
     let mut locked = global_alloc.lock();
     locked.write(allocator);
+
+    info!("frame allocator is initialized. phys mem size: {}", phys_mem_size);
 }
 
 /// use global frame allocator, without put off its clothes.
@@ -211,7 +213,7 @@ pub fn frame_alloc_n(count: usize) -> Option<PhysFrame> {
 }
 
 /// deallocate this phys frame
-pub fn frame_dealloc(frame: PhysFrame) {
+pub fn frame_dealloc(_frame: PhysFrame) {
     unimplemented!()
 }
 
