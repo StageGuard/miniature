@@ -1,0 +1,7 @@
+<component name="ProjectRunConfigurationManager">
+  <configuration default="false" name="build all" type="Multirun" separateTabs="false" reuseTabsWithFailures="false" startOneByOne="true" markFailedProcess="true" hideSuccessProcess="false" delayTime="0.0">
+    <runConfiguration name="build bootloader" type="Cargo" />
+    <runConfiguration name="build kernel" type="Cargo" />
+    <method v="2" />
+  </configuration>
+</component>
