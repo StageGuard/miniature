@@ -3,7 +3,8 @@ use core::sync::atomic::{AtomicU8, Ordering};
 use x86_64::registers::control::Cr3;
 use x86_64::structures::paging::PhysFrame;
 use x86_64::{PhysAddr, VirtAddr};
-use crate::acpi::lapic::LOCAL_APIC;
+use shared::arg::MadtLocalApic;
+use crate::acpi::local_apic::LOCAL_APIC;
 use crate::{_start_ap, AP_READY, CPU_COUNT, infohart, pause};
 use crate::mem::frame_allocator::frame_alloc_n;
 
@@ -11,7 +12,7 @@ const TRAMPOLINE: usize = 0x8000;
 // x86_64 trampoline from redox kernel
 static TRAMPOLINE_DATA: &[u8] = include_bytes!(concat!(env!("OUT_DIR"), "/trampoline"));
 
-pub fn setup_ap_startup(lapics: &[[u8; 2]], kernel_page_table: VirtAddr) {
+pub fn setup_ap_startup(lapics: &[MadtLocalApic], kernel_page_table: VirtAddr) {
     let mut lapic = unsafe { LOCAL_APIC };
 
     for i in 0..TRAMPOLINE_DATA.len() {
@@ -22,13 +23,13 @@ pub fn setup_ap_startup(lapics: &[[u8; 2]], kernel_page_table: VirtAddr) {
     }
 
     infohart!("starting ap...");
-    for &[lapic_id, cpu_id] in lapics {
-        if lapic.id() as u8 == lapic_id {
+    for &MadtLocalApic { id, processor_id } in lapics {
+        if lapic.id() as u8 == id {
             infohart!("  skipping bsp");
             continue
         }
 
-        infohart!("  starting ap {}", cpu_id);
+        infohart!("  starting ap {}", processor_id);
         CPU_COUNT.fetch_add(1, Ordering::SeqCst);
 
         let stack_start = frame_alloc_n(64)
@@ -46,7 +47,7 @@ pub fn setup_ap_startup(lapics: &[[u8; 2]], kernel_page_table: VirtAddr) {
 
         unsafe {
             ap_ready.write(0);
-            ap_cpu_id.write(lapic_id as u64);
+            ap_cpu_id.write(id as u64);
             ap_page_table.write(kernel_page_table.as_u64());
             ap_stack_start.write(stack_start);
             ap_stack_end.write(stack_end);
@@ -59,30 +60,31 @@ pub fn setup_ap_startup(lapics: &[[u8; 2]], kernel_page_table: VirtAddr) {
         AP_READY.store(false, Ordering::SeqCst);
 
         {   // INIT
-            let mut icr = 0x4500 | (lapic_id as u64) << if lapic.x2 { 32 } else { 56 };
-            infohart!("    lapic {} INIT...", lapic_id);
+            let mut icr = 0x4500 | (id as u64) << if lapic.x2 { 32 } else { 56 };
+            infohart!("    lapic {} INIT...", id);
             lapic.set_icr(icr);
         }
 
 
         {  // START IPI
             let mut icr = 0x4600 | ((TRAMPOLINE >> 12) & 0xFF) as u64;
-            icr |= (lapic_id as u64) << if lapic.x2 { 32 } else { 56 };
-            infohart!("    lapic {} SIPI...", lapic_id);
+            icr |= (id as u64) << if lapic.x2 { 32 } else { 56 };
+            infohart!("    lapic {} SIPI...", id);
             lapic.set_icr(icr);
         }
 
         // Wait for trampoline ready
-        infohart!("    lapic {} wait...", lapic_id);
+        infohart!("    lapic {} wait...", id);
         while unsafe { (*ap_ready.cast::<AtomicU8>()).load(Ordering::SeqCst) } == 0 {
             pause()
         }
-        infohart!("    lapic {} trampoline...", lapic_id);
+        infohart!("    lapic {} trampoline...", id);
         while !AP_READY.load(Ordering::SeqCst) {
             pause()
         }
-        infohart!("    lapic {} ready", lapic_id);
+        infohart!("    lapic {} ready", id);
 
+        // imme
         unsafe {
             let cr3 = Cr3::read();
             Cr3::write(PhysFrame::containing_address(PhysAddr::new(kernel_page_table.as_u64())), cr3.1)

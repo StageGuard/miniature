@@ -10,7 +10,8 @@
 
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use acpi::lapic::setup_apic;
+use log::info;
+use acpi::local_apic::setup_apic;
 use gdt::init_gdt;
 use interrupt::init_idt;
 
@@ -22,6 +23,7 @@ use shared::print_panic::PrintPanic;
 
 use crate::{arch_spec::cpuid::cpu_info, framebuffer::{init_framebuffer}, logger::{init_framebuffer_logger}};
 use crate::acpi::ap_startup::setup_ap_startup;
+use crate::acpi::io_apic::setup_io_apic;
 use crate::cpu::LogicalCpuId;
 
 mod arch_spec;
@@ -41,6 +43,7 @@ pub static CPU_COUNT: AtomicU32 = AtomicU32::new(0);
 pub static AP_READY: AtomicBool = AtomicBool::new(false);
 static BSP_READY: AtomicBool = AtomicBool::new(false);
 
+// entry for all things
 #[no_mangle]
 pub extern "C" fn _start(arg: &'static KernelArg) -> ! {
     #[cfg(test)]
@@ -60,8 +63,8 @@ pub extern "C" fn _start(arg: &'static KernelArg) -> ! {
     unsafe {
         interrupts::disable();
 
-        init_gdt(cpu::LogicalCpuId::BSP, arg.stack_top_addr);
-        init_idt(cpu::LogicalCpuId::BSP);
+        init_gdt(LogicalCpuId::BSP, arg.stack_top_addr);
+        init_idt(LogicalCpuId::BSP);
 
         setup_apic(arg.acpi.local_apic_base as u64, LogicalCpuId::BSP);
         interrupts::enable();
@@ -71,8 +74,13 @@ pub extern "C" fn _start(arg: &'static KernelArg) -> ! {
         BSP_READY.store(false, Ordering::SeqCst);
 
         setup_ap_startup(
-            &arg.acpi.local_apic[0..arg.acpi.local_apic_count],
+            &arg.acpi.local_apic[..arg.acpi.local_apic_count],
             VirtAddr::new(arg.kernel_pml4_start_addr)
+        );
+
+        setup_io_apic(
+            &arg.acpi.io_apic[..arg.acpi.io_apic_count],
+            &arg.acpi.interrupt_src_override[..arg.acpi.interrupt_src_override_count]
         );
     }
 
@@ -89,22 +97,22 @@ pub struct KernelArgsAp {
     stack_end: u64,
 }
 
+// entry for ap
 pub unsafe extern "C" fn _start_ap(arg_ptr: *const KernelArgsAp) -> ! {
     unsafe {
         let arg = &*arg_ptr;
         let cpu_id = LogicalCpuId(arg.cpu_id as u8);
 
-        interrupts::disable();
-
         init_gdt(cpu_id, arg.stack_end);
         init_idt(cpu_id);
 
-        interrupts::enable();
-
         setup_apic(0, cpu_id);
         AP_READY.store(true, Ordering::SeqCst);
+
+        interrupts::enable();
     }
 
+    // waiting for bsp initialization.
     while !BSP_READY.load(Ordering::SeqCst) {
         pause()
     }

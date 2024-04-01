@@ -12,7 +12,7 @@ use ::acpi::{AcpiHandler, PhysicalMapping};
 use log::{info, warn, debug};
 use mem::page_allocator::boot::allocate_zeroed_page_aligned;
 use mem::RTMemoryRegionDescriptor;
-use shared::arg::{AcpiSettings, KernelArg, MemoryRegion, MemoryRegionKind, MAX_CPUS};
+use shared::arg::{AcpiSettings, KernelArg, MemoryRegion, MemoryRegionKind, MAX_CPUS, MadtIoApic};
 use shared::framebuffer::Framebuffer;
 use uefi::proto::console::serial::Serial;
 use uefi::proto::media::partition::PartitionInfo;
@@ -25,10 +25,11 @@ use x86_64::registers::model_specific::{Efer, EferFlags, Msr};
 use x86_64::structures::paging::page_table::PageTableEntry;
 use x86_64::structures::paging::{Mapper, PageSize, PageTableFlags, PhysFrame, Size4KiB};
 use x86_64::{PhysAddr, VirtAddr};
+use xmas_elf::symbol_table::Visibility::Default;
 use crate::context::context_switch;
 use crate::device::partition::find_current_boot_partition;
 use crate::device::retrieve::{list_handles, ProtocolWithHandle};
-use crate::acpi::find_acpi_table_pointer;
+use crate::acpi::{find_acpi_table_pointer, parse_acpi_table};
 use crate::fs::{open_sfs, load_file_sfs};
 use crate::kernel::load_kernel_to_virt_mem;
 use crate::mem::frame_allocator::LinearIncFrameAllocator;
@@ -49,25 +50,6 @@ mod logger;
 mod mem;
 mod device;
 mod context;
-
-#[derive(Clone)]
-struct UefiAcpiHandler<'a>(&'a SystemTable<Boot>);
-
-impl AcpiHandler for UefiAcpiHandler<'_> {
-    unsafe fn map_physical_region<T>(&self, physical_address: usize, size: usize) -> ::acpi::PhysicalMapping<Self, T> {
-        PhysicalMapping::new(
-            physical_address, 
-            NonNull::new_unchecked(physical_address as u64 as *mut T), 
-            size,
-            size,
-            self.clone()
-        )
-    }
-
-    fn unmap_physical_region<T>(_region: &::acpi::PhysicalMapping<Self, T>) {
-        
-    }
-}
 
 #[entry]
 fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status {
@@ -95,63 +77,9 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     let boot_services = st.boot_services();
 
     // try to initialize acpi mode
-    let acpi_settings = find_acpi_table_pointer(&st).map(|(ptr, _)| unsafe {
-        
-        let handler = UefiAcpiHandler(&st);
-        let acpi_table = ::acpi::AcpiTables::from_rsdp(handler, ptr as usize)
-            .or_panic("failed to parse ACPI table from RSDP");
-
-        let fadt = acpi_table.find_table::<Fadt>()
-            .or_panic("no FADT entry in ACPI table");
-
-        if fadt.smi_cmd_port == 0 {
-            warn!("System Management Mode is not supported.");
-            return Default::default()
-        }
-
-        let mut smi_serial = Port::new(fadt.smi_cmd_port as u16);
-        smi_serial.write(fadt.acpi_enable);
-        let mut pm1a_cb_serial: Port<u16> = Port::new(fadt.pm1a_control_block().unwrap().address as u16);
-        // TODO: wait for 3 seconds which do as same as linux kernel
-        while pm1a_cb_serial.read() & 1 == 0 {
-            core::arch::asm!("hlt");
-        }
-
-        let madt = acpi_table.find_table::<Madt>()
-            .or_panic("no MADT entry in ACPI table");
-        let madt_entries = madt.entries();
-
-        let mut local_apic_base: Option<usize> = None;
-
-        let mut lapics: [[u8; 2]; MAX_CPUS] = [Default::default(); MAX_CPUS];
-        let mut lapic_count = 0;
-
-        for entry in madt_entries {
-            match entry {
-                MadtEntry::LocalApic(local_apic) => {
-                    let flags = local_apic.flags;
-                    if flags & 3 != 0 {
-                        lapics[lapic_count] = [local_apic.apic_id, local_apic.processor_id];
-                        lapic_count += 1;
-                    } else {
-                        warn!("Local APIC cannot be enabled, flag: {flags}")
-                    }
-                    
-                },
-                _ => { }
-            }
-        }
-
-        if lapic_count != 0 {
-            local_apic_base.replace(read_local_apic_base() as usize);
-        }
-
-        AcpiSettings {
-            local_apic_base: local_apic_base.unwrap_or(0),
-            local_apic: lapics.clone(),
-            local_apic_count: lapic_count
-        }
-    }).or_panic("ACPI is not supported on this machine.");
+    let acpi_settings = find_acpi_table_pointer(&st)
+        .map(|(ptr, _)| parse_acpi_table(&st, ptr))
+        .or_panic("ACPI is not supported on this machine.");
 
     // find partition of current loaded image.
     const PWH_UNINITIALIZED: MaybeUninit<ProtocolWithHandle<'_, PartitionInfo>> = MaybeUninit::<ProtocolWithHandle<PartitionInfo>>::uninit();
@@ -248,8 +176,10 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         &framebuffer, 
         &kernel,
         acpi_settings.local_apic_base as u64,
+        &acpi_settings.io_apic[..acpi_settings.io_apic_count],
         kernel_gdt.start_address().as_u64(),
-        kernel_pml4_table_phys_frame.start_address().as_u64()
+        kernel_pml4_table_phys_frame.start_address().as_u64(),
+
     );
     // 创建内核参数，把这些参数传给内核来让内核读取一些信息
     let kernel_arg = KernelArg {
@@ -314,8 +244,9 @@ fn construct_unsafe_phys_mem_region_map<I: ExactSizeIterator<Item = MemoryDescri
     framebuffer: &Option<Framebuffer>,
     kernel_bytes: &[u8],
     lapic_base: u64,
+    io_apics: &[MadtIoApic],
     gdt: u64,
-    kernel_page_table: u64
+    kernel_page_table: u64,
 ) -> ([MaybeUninit<MemoryRegion>; 512], usize) {
     let mut regions: [MaybeUninit<MemoryRegion>; 512] = MaybeUninit::uninit_array();
     let mut curr_idx = 0;
@@ -362,6 +293,16 @@ fn construct_unsafe_phys_mem_region_map<I: ExactSizeIterator<Item = MemoryDescri
         kind: MemoryRegionKind::Bootloader
     });
     curr_idx += 1;
+
+    // local apic
+    for &io_apic_base in io_apics {
+        regions[curr_idx].write(MemoryRegion {
+            start: io_apic_base.address as u64,
+            length: Size4KiB::SIZE,
+            kind: MemoryRegionKind::Bootloader
+        });
+        curr_idx += 1;
+    }
 
     // gdt
     regions[curr_idx].write(MemoryRegion {

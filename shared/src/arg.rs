@@ -95,8 +95,36 @@ pub struct KernelArg {
 #[derive(Debug, Clone, Copy)]
 pub struct AcpiSettings {
     pub local_apic_base: usize,
-    pub local_apic: [[u8; 2]; MAX_CPUS],
+    pub local_apic: [MadtLocalApic; MAX_CPUS],
     pub local_apic_count: usize,
+    pub io_apic: [MadtIoApic; MAX_CPUS],
+    pub io_apic_count: usize,
+    pub interrupt_src_override: [MadtInterruptSrcOverride; MAX_CPUS],
+    pub interrupt_src_override_count: usize
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MadtLocalApic {
+    pub id: u8,
+    pub processor_id: u8
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MadtIoApic {
+    pub id: u8,
+    pub address: u32,
+    pub gsi_base: u32,
+}
+
+#[repr(C)]
+#[derive(Debug, Clone, Copy, Default)]
+pub struct MadtInterruptSrcOverride {
+    pub bus_source: u8,
+    pub irq_source: u8,
+    pub gsi: u32,
+    pub flags: u16,
 }
 
 impl Default for AcpiSettings {
@@ -104,7 +132,11 @@ impl Default for AcpiSettings {
         Self {
             local_apic_base: Default::default(),
             local_apic: [Default::default(); MAX_CPUS],
-            local_apic_count: Default::default()
+            local_apic_count: Default::default(),
+            io_apic: [Default::default(); MAX_CPUS],
+            io_apic_count: Default::default(),
+            interrupt_src_override: [Default::default(); MAX_CPUS],
+            interrupt_src_override_count: Default::default()
         }
     }
 }

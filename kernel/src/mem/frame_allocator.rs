@@ -113,17 +113,22 @@ impl LinkedRangeIterator {
 
         let mut ranges_ret: [MaybeUninit<Range<u64>>; MAX_RANGE_COUNT] = MaybeUninit::uninit_array();
         let mut curr_idx = 0;
+        let mut initial_index = 0;
 
         while curr_idx < size {
             let pop = &merged_stack[curr_idx];
             let pop = unsafe { pop.assume_init_ref() };
             ranges_ret[curr_idx].write(pop.clone());
             curr_idx += 1;
+
+            if pop.end <= start {
+                initial_index = curr_idx;
+            }
         }
 
         Self {
             ranges: unsafe { transmute(ranges_ret) },
-            current_range_index: 0,
+            current_range_index: initial_index,
             current_value: start,
             range_size: size,
             window
