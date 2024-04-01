@@ -1,4 +1,4 @@
-use core::mem::{size_of};
+use core::mem::{offset_of, size_of};
 
 
 use log::info;
@@ -55,7 +55,7 @@ pub unsafe fn init_gdt(cpu_id: LogicalCpuId, kernel_stack_top: u64) {
     let data_selector = pcr.gdt.add_entry(Descriptor::kernel_data_segment()); // GDT[2] = KERNEL_DATA
     pcr.gdt.add_entry(Descriptor::UserSegment(DescriptorFlags::KERNEL_CODE32.bits() | DescriptorFlags::DPL_RING_3.bits())); // GDT[3] = USER_CODE_32
     pcr.gdt.add_entry(Descriptor::user_code_segment()); // GDT[4] = USER_CODE
-    pcr.gdt.add_entry(Descriptor::user_data_segment()); // GDT[5] = USER_DATE
+    pcr.gdt.add_entry(Descriptor::user_data_segment()); // GDT[5] = USER_DATA
     let tss_selector = pcr.gdt.add_entry(Descriptor::tss_segment(&pcr.tss)); // GDT[6.=7] = TSS
 
     pcr.gdt.load_unsafe();
@@ -86,6 +86,6 @@ pub unsafe fn pcr() -> *mut ProcessorControlRegion {
     // obtaining FSBASE/GSBASE using mov gs:[gs_self_ref] is faster than using the (probably
     // microcoded) instructions.
     let mut ret: *mut ProcessorControlRegion;
-    core::arch::asm!("mov {}, gs:[{}]", out(reg) ret, const(core::mem::offset_of!(ProcessorControlRegion, self_ref)));
+    core::arch::asm!("mov {}, gs:[{}]", out(reg) ret, const(offset_of!(ProcessorControlRegion, self_ref)));
     ret
 }

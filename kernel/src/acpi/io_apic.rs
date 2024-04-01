@@ -199,7 +199,6 @@ pub fn setup_io_apic(
     let bsp_lapic_id = unsafe { LOCAL_APIC.id() };
 
     for entry in madt_io_apics {
-        infohart!("ioapic base: 0x{:x}", entry.address);
         let ioapic = IoApic::new(entry.address, entry.gsi_base);
         assert_eq!(
             ioapic.regs.lock().id(),

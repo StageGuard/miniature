@@ -2,6 +2,7 @@
 #![no_main]
 #![feature(asm_const)]
 #![feature(offset_of)]
+#![feature(naked_functions)]
 #![feature(abi_x86_interrupt)]
 #![feature(custom_test_frameworks)]
 #![feature(maybe_uninit_uninit_array)]
@@ -10,7 +11,6 @@
 
 use core::arch::asm;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
-use log::info;
 use acpi::local_apic::setup_apic;
 use gdt::init_gdt;
 use interrupt::init_idt;
@@ -25,6 +25,7 @@ use crate::{arch_spec::cpuid::cpu_info, framebuffer::{init_framebuffer}, logger:
 use crate::acpi::ap_startup::setup_ap_startup;
 use crate::acpi::io_apic::setup_io_apic;
 use crate::cpu::LogicalCpuId;
+use crate::syscall::init_syscall;
 
 mod arch_spec;
 mod panic;
@@ -36,6 +37,7 @@ mod gdt;
 mod interrupt;
 mod acpi;
 mod cpu;
+mod syscall;
 
 extern crate alloc;
 
@@ -69,6 +71,7 @@ pub extern "C" fn _start(arg: &'static KernelArg) -> ! {
         setup_apic(arg.acpi.local_apic_base as u64, LogicalCpuId::BSP);
         interrupts::enable();
 
+        init_syscall();
         CPU_COUNT.store(1, Ordering::SeqCst);
         AP_READY.store(false, Ordering::SeqCst);
         BSP_READY.store(false, Ordering::SeqCst);
@@ -105,6 +108,8 @@ pub unsafe extern "C" fn _start_ap(arg_ptr: *const KernelArgsAp) -> ! {
 
         init_gdt(cpu_id, arg.stack_end);
         init_idt(cpu_id);
+
+        init_syscall();
 
         setup_apic(0, cpu_id);
         AP_READY.store(true, Ordering::SeqCst);
