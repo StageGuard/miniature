@@ -39,8 +39,11 @@ unsafe impl GlobalAlloc for LockedGlobalAlloc {
     }
 }
 
+#[derive(Debug)]
+pub struct OutOfMemory;
+
 // delegate static global alloc
-struct _DelegateAlloc;
+pub(super) struct _DelegateAlloc;
 
 unsafe impl GlobalAlloc for _DelegateAlloc {
     unsafe fn alloc(&self, layout: core::alloc::Layout) -> *mut u8 {
@@ -55,7 +58,7 @@ unsafe impl GlobalAlloc for _DelegateAlloc {
 }
 
 #[global_allocator]
-static HEAP_ALLOC: _DelegateAlloc = _DelegateAlloc;
+pub static HEAP_ALLOC: _DelegateAlloc = _DelegateAlloc;
 
 #[test_case]
 fn test_heap_allocator() {

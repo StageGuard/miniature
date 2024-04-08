@@ -79,7 +79,7 @@ pub unsafe extern "C" fn __inner_syscall_instruction(stack: *mut SyscallArgsStac
         &stack_ref.scratch.r8
     ];
 
-    infohart!("syscall: arg = {:?}", args);
+    infohart!("syscall_module: arg = {:?}", args);
 
     stack_ref.set_syscall_ret_reg(0);
 }

@@ -5,7 +5,6 @@ use crate::errorhart;
 #[cfg(not(test))]
 #[panic_handler]
 fn panic_handler(info: &PanicInfo) -> ! {
-    use log::error;
     use crate::halt;
 
     errorhart!("kernel panic: {:?}", info);

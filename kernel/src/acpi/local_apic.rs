@@ -5,7 +5,8 @@ use x86_64::{instructions::port::{Port, PortGeneric, ReadWriteAccess}, registers
 
 use crate::cpu::LogicalCpuId;
 use crate::interrupt::LAPIC_TIMER_HANDLER_IDT;
-use crate::{arch_spec::msr::{rdmsr, wrmsr}, arch_spec::cpuid::cpuid, device::port::{inb, outb}, infohart};
+use crate::{arch_spec::cpuid::cpuid, arch_spec::msr::{rdmsr, wrmsr}, infohart};
+use crate::arch_spec::port::{inb, outb};
 
 
 const IA32_APIC_BASE_MSR: u32 = 0x1B;

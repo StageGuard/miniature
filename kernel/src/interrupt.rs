@@ -8,7 +8,7 @@ use core::{fmt::Write};
 
 use crate::{acpi::local_apic::LOCAL_APIC, cpu::LogicalCpuId, device::qemu::exit_qemu, gdt::{pcr}, halt, infohart, mem::{frame_allocator::frame_alloc_n, PAGE_SIZE}, qemu_print, qemu_println};
 use crate::acpi::local_apic::IpiKind;
-use crate::device::port::inb;
+use crate::arch_spec::port::inb;
 
 const DEPENDENT_STACK_SIZE: usize = 65536;
 pub const LAPIC_TIMER_HANDLER_IDT: u32 = 48;

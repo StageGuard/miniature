@@ -237,7 +237,7 @@ pub fn cpu_info() -> Result {
             write!(fl_writer, " nx")?
         };
         if info.has_syscall_sysret() {
-            write!(fl_writer, " syscall")?
+            write!(fl_writer, " syscall_module")?
         };
         if info.has_prefetchw() {
             write!(fl_writer, " prefetchw")?

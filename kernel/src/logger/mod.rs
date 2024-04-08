@@ -1,4 +1,3 @@
-use alloc::format;
 use log::{info, Log, log};
 use shared::{framebuffer::Framebuffer, framebuffer_writer::FrameBufferWriter, uni_processor::UPSafeCell};
 use spin::Mutex;
@@ -43,10 +42,10 @@ impl log::Log for FramebufferLogger<'_> {
 #[macro_export]
 macro_rules! loghart {
     ($lvl:expr, $($arg:tt)+) => {
-        ::log::log!($lvl, concat!("[#{}] {}"), unsafe { (*crate::gdt::pcr()).cpu_id }, format_args!($($arg)+))
+        ::log::log!($lvl, concat!("[#{}] {}"), unsafe { (*crate::gdt::pcr()).percpu.cpu_id.0 }, format_args!($($arg)+))
     };
     ($lvl:expr, target: $target:expr, $($arg:tt)+) => {
-        ::log::log!(concat!("[#{}] ", target: $target), $lvl, unsafe { (*crate::gdt::pcr()).cpu_id }, $($arg)+)
+        ::log::log!(concat!("[#{}] ", target: $target), $lvl, unsafe { (*crate::gdt::pcr()).percpu.cpu_id.0 }, $($arg)+)
     };
 }
 

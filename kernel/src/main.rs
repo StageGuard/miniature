@@ -4,6 +4,7 @@
 #![feature(offset_of)]
 #![feature(naked_functions)]
 #![feature(abi_x86_interrupt)]
+#![feature(arbitrary_self_types)]
 #![feature(custom_test_frameworks)]
 #![feature(maybe_uninit_uninit_array)]
 #![test_runner(crate::test_runner)]
@@ -25,6 +26,7 @@ use crate::{arch_spec::cpuid::cpu_info, framebuffer::{init_framebuffer}, logger:
 use crate::acpi::ap_startup::setup_ap_startup;
 use crate::acpi::io_apic::setup_io_apic;
 use crate::cpu::LogicalCpuId;
+use crate::device::com::init_com;
 use crate::syscall::init_syscall;
 
 mod arch_spec;
@@ -38,6 +40,9 @@ mod interrupt;
 mod acpi;
 mod cpu;
 mod syscall;
+mod context;
+mod common;
+mod syscall_module;
 
 extern crate alloc;
 
@@ -62,29 +67,35 @@ pub extern "C" fn _start(arg: &'static KernelArg) -> ! {
         &arg.unav_phys_mem_regions[..arg.unav_phys_mem_regions_len]
     );
 
-    unsafe {
-        interrupts::disable();
+    interrupts::disable();
 
+    unsafe {
         init_gdt(LogicalCpuId::BSP, arg.stack_top_addr);
         init_idt(LogicalCpuId::BSP);
 
         setup_apic(arg.acpi.local_apic_base as u64, LogicalCpuId::BSP);
-        interrupts::enable();
 
         init_syscall();
-        CPU_COUNT.store(1, Ordering::SeqCst);
-        AP_READY.store(false, Ordering::SeqCst);
-        BSP_READY.store(false, Ordering::SeqCst);
+    }
 
-        setup_ap_startup(
-            &arg.acpi.local_apic[..arg.acpi.local_apic_count],
-            VirtAddr::new(arg.kernel_pml4_start_addr)
-        );
+    interrupts::enable();
 
-        setup_io_apic(
-            &arg.acpi.io_apic[..arg.acpi.io_apic_count],
-            &arg.acpi.interrupt_src_override[..arg.acpi.interrupt_src_override_count]
-        );
+    CPU_COUNT.store(1, Ordering::SeqCst);
+    AP_READY.store(false, Ordering::SeqCst);
+    BSP_READY.store(false, Ordering::SeqCst);
+
+    setup_ap_startup(
+        &arg.acpi.local_apic[..arg.acpi.local_apic_count],
+        VirtAddr::new(arg.kernel_pml4_start_addr)
+    );
+
+    setup_io_apic(
+        &arg.acpi.io_apic[..arg.acpi.io_apic_count],
+        &arg.acpi.interrupt_src_override[..arg.acpi.interrupt_src_override_count]
+    );
+
+    unsafe {
+        init_com();
     }
 
     unreachable!()
@@ -109,9 +120,9 @@ pub unsafe extern "C" fn _start_ap(arg_ptr: *const KernelArgsAp) -> ! {
         init_gdt(cpu_id, arg.stack_end);
         init_idt(cpu_id);
 
-        init_syscall();
 
         setup_apic(0, cpu_id);
+        init_syscall();
         AP_READY.store(true, Ordering::SeqCst);
 
         interrupts::enable();

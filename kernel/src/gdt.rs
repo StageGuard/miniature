@@ -1,4 +1,5 @@
 use core::mem::{offset_of, size_of};
+use core::ptr;
 
 
 use log::info;
@@ -6,6 +7,7 @@ use log::info;
 use x86_64::{instructions::{tables::load_tss}, registers::{control::{Cr0, Cr0Flags}, segmentation::{Segment, CS, DS, ES, GS, SS}}, structures::{gdt::{Descriptor, DescriptorFlags, GlobalDescriptorTable, SegmentSelector}, tss::TaskStateSegment}, VirtAddr};
 
 use crate::{arch_spec::msr::wrmsr, cpu::LogicalCpuId, infohart, loghart, mem::{frame_allocator::{frame_alloc_n}, PAGE_SIZE}};
+use crate::cpu::PercpuBlock;
 
 const STACK_SIZE: usize = 10 * 0x1000; // 10 KiB
 const IOBITMAP_SIZE: u32 = 65536 / 8;
@@ -19,8 +21,7 @@ pub struct ProcessorControlRegion {
 
     pub user_rsp_tmp: usize,
     pub gdt: GlobalDescriptorTable,
-    pub _percpu: (),
-    pub cpu_id: u8,
+    pub percpu: PercpuBlock,
     _rsvd: Align,
     pub tss: TaskStateSegment,
 
@@ -34,6 +35,16 @@ pub struct ProcessorControlRegion {
 #[repr(C, align(16))]
 struct Align([usize; 2]);
 
+impl ProcessorControlRegion {
+    pub unsafe fn set_tss_stack(self: *mut Self, stack_virt_addr: u64) {
+        ptr::addr_of_mut!((*self).tss.privilege_stack_table[0]).write_unaligned(VirtAddr::new(stack_virt_addr));
+    }
+
+    pub unsafe fn set_userspace_io_allowed(self: *mut Self, allowed: bool) {
+        ptr::addr_of_mut!((*self).tss.iomap_base)
+            .write_unaligned(if allowed { u16::try_from(size_of::<TaskStateSegment>()).unwrap() } else { 0xFFFF });
+    }
+}
 
 // from redox-os kernel
 pub unsafe fn init_gdt(cpu_id: LogicalCpuId, kernel_stack_top: u64) {
@@ -45,7 +56,7 @@ pub unsafe fn init_gdt(cpu_id: LogicalCpuId, kernel_stack_top: u64) {
     pcr.gdt = GlobalDescriptorTable::new();
 
     pcr.tss = TaskStateSegment::new();
-    pcr.tss.privilege_stack_table[0] = VirtAddr::new(kernel_stack_top);
+    (pcr as *mut ProcessorControlRegion).set_tss_stack(kernel_stack_top);
 
     pcr.tss.iomap_base = 0xffff;
     pcr._all_ones = 0xff;
@@ -76,7 +87,7 @@ pub unsafe fn init_gdt(cpu_id: LogicalCpuId, kernel_stack_top: u64) {
 
     Cr0::update(|cr0| *cr0 |= Cr0Flags::PROTECTED_MODE_ENABLE);
 
-    pcr.cpu_id = cpu_id.0;
+    pcr.percpu.cpu_id = cpu_id;
 
     infohart!("global descriptor table is initialized, pcr base: 0x{:x}", pcr as *const _ as u64);
 }

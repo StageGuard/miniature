@@ -1,3 +1,2 @@
 pub mod qemu;
-pub mod uart;
-pub mod port;
+pub mod com;
