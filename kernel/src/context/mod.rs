@@ -1,10 +1,12 @@
 use core::sync::atomic::AtomicUsize;
+use crate::context::list::context_storage_mut;
 use crate::mem::aligned_box::AlignedBox;
 use crate::context::signal::SignalState;
 use crate::context::status::{HardBlockedReason, Status};
 use crate::cpu::{LogicalCpuId, PercpuBlock};
 use crate::int_like;
 use crate::mem::PAGE_SIZE;
+use crate::mem::user_addr_space::ArcRwLockUserAddrSpace;
 
 pub mod list;
 pub mod switch;
@@ -29,8 +31,13 @@ pub struct Context {
     pub status: Status,
     // signal state
     pub signal: SignalState,
-    // regs
-    pub regs: ContextRegisters
+    // registers
+    pub regs: ContextRegisters,
+    // All contexts except kmain will primarily live in userspace, and enter the kernel only when
+    // interrupts or syscall occur. This flag is set for all contexts but kmain.
+    pub userspace: bool,
+    // address space
+    pub addrsp: Option<ArcRwLockUserAddrSpace>,
 }
 
 impl Context {
@@ -46,7 +53,9 @@ impl Context {
                 pending: 0,
                 procmask: !0
             },
-            regs: ContextRegisters::new()
+            regs: ContextRegisters::new(),
+            userspace: false,
+            addrsp: None
         }
     }
     /// Block the context, and return true if it was runnable before being blocked
@@ -151,4 +160,24 @@ impl ContextRegisters {
 
 pub fn context_id() -> ContextId {
     PercpuBlock::current().context_switch.context_id()
+}
+
+pub fn init_context() {
+    let percpu = PercpuBlock::current();
+    let mut contexts = context_storage_mut();
+    let id = ContextId::from(percpu.cpu_id.0 as usize);
+
+    let context_lock = contexts.insert_context(id)
+        .expect("failed to initialize first context");
+    let mut context = context_lock.write();
+
+    context.signal.procmask = 0;
+    context.status = Status::Runnable;
+    context.running = true;
+    context.cpu_id = Some(percpu.cpu_id);
+
+    unsafe {
+        percpu.context_switch.set_context_id(context.id);
+        percpu.context_switch.set_idle_id(context.id);
+    }
 }

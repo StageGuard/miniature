@@ -7,8 +7,8 @@ use x86_64::{registers::control::Cr2, structures::idt::{InterruptDescriptorTable
 use core::{fmt::Write};
 
 use crate::{acpi::local_apic::LOCAL_APIC, cpu::LogicalCpuId, device::qemu::exit_qemu, gdt::{pcr}, halt, infohart, mem::{frame_allocator::frame_alloc_n, PAGE_SIZE}, qemu_print, qemu_println};
-use crate::acpi::local_apic::IpiKind;
 use crate::arch_spec::port::inb;
+use crate::ipi::IpiKind;
 
 const DEPENDENT_STACK_SIZE: usize = 65536;
 pub const LAPIC_TIMER_HANDLER_IDT: u32 = 48;
@@ -115,11 +115,13 @@ macro_rules! interrupt {
     };
     ($name:ident, !, |$stack_frame:ident $(, $error_code:ident)?| $code:block) => {
         extern "x86-interrupt" fn $name($stack_frame: InterruptStackFrame$(, $error_code: u64)?) -> ! {
+            #[allow(unused_unsafe)]
             unsafe { $code }
         }
     };
     ($name:ident, |$stack_frame:ident $(, $error_code:ident)?| $code:block) => {
         extern "x86-interrupt" fn $name($stack_frame: InterruptStackFrame$(, $error_code: u64)?) {
+            #[allow(unused_unsafe)]
             unsafe { $code };
         }
     };
@@ -154,8 +156,8 @@ interrupt!(vmm_communication_exception, @err_code);
 interrupt!(security_exception, @err_code);
 
 // legacy irqs
-interrupt!(pit_stack, |stack| { LOCAL_APIC.eoi() });
-interrupt!(keyboard, |stack| {
+interrupt!(pit_stack, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(keyboard, |_stack| {
     use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
     use spin::Mutex;
 
@@ -177,27 +179,30 @@ interrupt!(keyboard, |stack| {
         }
     }
 });
-interrupt!(cascade, |stack| { LOCAL_APIC.eoi() });
-interrupt!(com2, |stack| { LOCAL_APIC.eoi() });
-interrupt!(com1, |stack| { LOCAL_APIC.eoi() });
-interrupt!(lpt2, |stack| { LOCAL_APIC.eoi() });
-interrupt!(floppy, |stack| { LOCAL_APIC.eoi() });
-interrupt!(lpt1, |stack| { LOCAL_APIC.eoi() });
-interrupt!(rtc, |stack| { LOCAL_APIC.eoi() });
-interrupt!(pci1, |stack| { LOCAL_APIC.eoi() });
-interrupt!(pci2, |stack| { LOCAL_APIC.eoi() });
-interrupt!(pci3, |stack| { LOCAL_APIC.eoi() });
-interrupt!(mouse, |stack| { LOCAL_APIC.eoi() });
-interrupt!(fpu, |stack| { LOCAL_APIC.eoi() });
-interrupt!(ata1, |stack| { LOCAL_APIC.eoi() });
-interrupt!(ata2, |stack| { LOCAL_APIC.eoi() });
-interrupt!(lapic_timer, |stack| { LOCAL_APIC.eoi() });
-interrupt!(lapic_error, |stack| { });
+interrupt!(cascade, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(com2, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(com1, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(lpt2, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(floppy, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(lpt1, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(rtc, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(pci1, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(pci2, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(pci3, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(mouse, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(fpu, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(ata1, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(ata2, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(lapic_timer, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(lapic_error, |_stack| { });
 
 // ipis
-interrupt!(ipi_wakeup, |stack| { LOCAL_APIC.eoi() });
-interrupt!(ipi_switch, |stack| { LOCAL_APIC.eoi() });
-interrupt!(ipi_pit, |stack| { LOCAL_APIC.eoi() });
+interrupt!(ipi_wakeup, |_stack| {
+    infohart!("ipi wakeup");
+    LOCAL_APIC.eoi()
+});
+interrupt!(ipi_switch, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(ipi_pit, |_stack| { LOCAL_APIC.eoi() });
 
 
 #[test_case]

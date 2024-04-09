@@ -2,6 +2,7 @@
 #![no_main]
 #![feature(asm_const)]
 #![feature(offset_of)]
+#![feature(allocator_api)]
 #![feature(naked_functions)]
 #![feature(abi_x86_interrupt)]
 #![feature(arbitrary_self_types)]
@@ -11,6 +12,7 @@
 #![reexport_test_harness_main = "test_main"]
 
 use core::arch::asm;
+use core::hint::spin_loop;
 use core::sync::atomic::{AtomicBool, AtomicU32, Ordering};
 use acpi::local_apic::setup_apic;
 use gdt::init_gdt;
@@ -25,8 +27,11 @@ use shared::print_panic::PrintPanic;
 use crate::{arch_spec::cpuid::cpu_info, framebuffer::{init_framebuffer}, logger::{init_framebuffer_logger}};
 use crate::acpi::ap_startup::setup_ap_startup;
 use crate::acpi::io_apic::setup_io_apic;
-use crate::cpu::LogicalCpuId;
+use crate::context::init_context;
+use crate::cpu::{LogicalCpuId, PercpuBlock};
 use crate::device::com::init_com;
+use crate::ipi::{ipi, ipi_single, IpiKind, IpiTarget};
+use crate::mem::set_kernel_pml4_page_table;
 use crate::syscall::init_syscall;
 
 mod arch_spec;
@@ -43,6 +48,7 @@ mod syscall;
 mod context;
 mod common;
 mod syscall_module;
+mod ipi;
 
 extern crate alloc;
 
@@ -61,6 +67,7 @@ pub extern "C" fn _start(arg: &'static KernelArg) -> ! {
 
     cpu_info().or_panic("failed to print cpu info");
 
+    set_kernel_pml4_page_table(arg.kernel_pml4_start_addr);
     init_frame_allocator(
         VirtAddr::new(arg.phys_mem_mapped_addr),
         arg.phys_mem_size,
@@ -98,11 +105,17 @@ pub extern "C" fn _start(arg: &'static KernelArg) -> ! {
         init_com();
     }
 
+    BSP_READY.store(true, Ordering::SeqCst);
+
+    // bsp kernel main
+
+    init_context();
+
     unreachable!()
 }
 
 #[repr(packed)]
-pub struct KernelArgsAp {
+pub struct KernelArgAp {
     // TODO: u32?
     cpu_id: u64,
 
@@ -112,7 +125,7 @@ pub struct KernelArgsAp {
 }
 
 // entry for ap
-pub unsafe extern "C" fn _start_ap(arg_ptr: *const KernelArgsAp) -> ! {
+pub unsafe extern "C" fn _start_ap(arg_ptr: *const KernelArgAp) -> ! {
     unsafe {
         let arg = &*arg_ptr;
         let cpu_id = LogicalCpuId(arg.cpu_id as u8);
@@ -130,7 +143,7 @@ pub unsafe extern "C" fn _start_ap(arg_ptr: *const KernelArgsAp) -> ! {
 
     // waiting for bsp initialization.
     while !BSP_READY.load(Ordering::SeqCst) {
-        pause()
+        spin_loop()
     }
 
     unreachable!();
@@ -140,10 +153,6 @@ fn halt() -> ! {
     loop {
         instructions::hlt();
     }
-}
-
-pub fn pause() {
-    unsafe { asm!("pause", options(nomem, nostack)); }
 }
 
 #[cfg(test)]

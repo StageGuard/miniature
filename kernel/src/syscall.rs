@@ -15,7 +15,7 @@ use crate::infohart;
 
 #[derive(Default)]
 #[repr(C)]
-pub struct SyscallArgsStack {
+pub struct InterruptStack {
     pub preserved: PreservedRegisters,
     pub scratch: ScratchRegisters,
     pub iret: IretRegisters,
@@ -60,14 +60,30 @@ pub struct IretRegisters {
     pub ss: usize,
 }
 
-impl SyscallArgsStack {
+impl InterruptStack {
+    pub fn init(&mut self) {
+        // Always enable interrupts!
+        self.iret.rflags = RFlags::INTERRUPT_FLAG.bits() as usize;
+        self.iret.cs = (4 << 3) | 3; // GDT[4] = GDT_USER_CODE
+        self.iret.ss = (5 << 3) | 3; // GDT[5] = GDT_USER_DATA
+    }
+    pub fn set_stack_pointer(&mut self, rsp: usize) {
+        self.iret.rsp = rsp;
+    }
+    pub fn stack_pointer(&self) -> usize {
+        self.iret.rsp
+    }
+    pub fn set_instr_pointer(&mut self, rip: usize) {
+        self.iret.rip = rip;
+    }
+    // TODO: This can maybe be done in userspace?
     pub fn set_syscall_ret_reg(&mut self, ret: usize) {
         self.scratch.rax = ret;
     }
 }
 
 #[no_mangle]
-pub unsafe extern "C" fn __inner_syscall_instruction(stack: *mut SyscallArgsStack) {
+pub unsafe extern "C" fn __inner_syscall_instruction(stack: *mut InterruptStack) {
     let stack_ref = &mut *stack;
 
     let args = [
@@ -189,6 +205,10 @@ pub unsafe extern "C" fn syscall_instruction() {
 
         options(noreturn),
     );
+}
+
+extern "C" {
+    pub fn enter_usermode();
 }
 
 pub unsafe fn init_syscall() {

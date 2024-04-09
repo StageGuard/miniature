@@ -1,11 +1,12 @@
 use core::arch::{asm, global_asm};
+use core::hint::spin_loop;
 use core::sync::atomic::{AtomicU8, Ordering};
 use x86_64::registers::control::Cr3;
 use x86_64::structures::paging::PhysFrame;
 use x86_64::{PhysAddr, VirtAddr};
 use shared::arg::MadtLocalApic;
 use crate::acpi::local_apic::LOCAL_APIC;
-use crate::{_start_ap, AP_READY, CPU_COUNT, infohart, pause};
+use crate::{_start_ap, AP_READY, CPU_COUNT, infohart};
 use crate::mem::frame_allocator::frame_alloc_n;
 
 const TRAMPOLINE: usize = 0x8000;
@@ -54,7 +55,7 @@ pub fn setup_ap_startup(lapics: &[MadtLocalApic], kernel_page_table: VirtAddr) {
             ap_code.write(_start_ap as u64);
 
             // TODO: Is this necessary (this fence)?
-            core::arch::asm!("");
+            asm!("");
         };
 
         AP_READY.store(false, Ordering::SeqCst);
@@ -76,11 +77,11 @@ pub fn setup_ap_startup(lapics: &[MadtLocalApic], kernel_page_table: VirtAddr) {
         // Wait for trampoline ready
         infohart!("    lapic {} wait...", id);
         while unsafe { (*ap_ready.cast::<AtomicU8>()).load(Ordering::SeqCst) } == 0 {
-            pause()
+            spin_loop()
         }
         infohart!("    lapic {} trampoline...", id);
         while !AP_READY.load(Ordering::SeqCst) {
-            pause()
+            spin_loop()
         }
         infohart!("    lapic {} ready", id);
 

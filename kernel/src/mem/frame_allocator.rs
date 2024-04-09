@@ -219,7 +219,7 @@ pub fn frame_alloc_n(count: usize) -> Option<PhysFrame> {
 
 /// deallocate this phys frame
 pub fn frame_dealloc(_frame: PhysFrame) {
-    unimplemented!()
+    // unimplemented
 }
 
 #[test_case]

@@ -7,6 +7,7 @@ use crate::cpu::LogicalCpuId;
 use crate::interrupt::LAPIC_TIMER_HANDLER_IDT;
 use crate::{arch_spec::cpuid::cpuid, arch_spec::msr::{rdmsr, wrmsr}, infohart};
 use crate::arch_spec::port::{inb, outb};
+use crate::IpiKind;
 
 
 const IA32_APIC_BASE_MSR: u32 = 0x1B;
@@ -266,13 +267,4 @@ pub unsafe fn setup_apic(apic_base: u64, cpu_id: LogicalCpuId) {
     LOCAL_APIC.set_lvt_error(49u32);
 
     infohart!("BSP LAPIC initialized, CPU bus frequency: {} Hz", lapic_ticks_in_10_ms * 100);
-}
-
-#[derive(Clone, Copy, Debug)]
-#[repr(u8)]
-pub enum IpiKind {
-    Wakeup = 0x40,
-    Tlb = 0x41,
-    Switch = 0x42,
-    Pit = 0x43
 }
