@@ -1,13 +1,41 @@
+use core::fmt;
+
+#[derive(Clone, Copy, Eq, PartialEq)]
+pub struct KError {
+    pub errno: i32,
+}
+
+pub type KResult<T, E = KError> = Result<T, E>;
+
+impl KError {
+    pub fn new(errno: i32) -> KError {
+        KError { errno }
+    }
+
+    pub fn mux(result: KResult<usize>) -> usize {
+        result.unwrap_or_else(|error| -error.errno as usize)
+    }
+
+    pub fn demux(value: usize) -> KResult<usize> {
+        let errno = -(value as i32);
+        if errno >= 1 && errno < ENOTRECOVERABLE {
+            Err(KError::new(errno))
+        } else {
+            Ok(value)
+        }
+    }
+}
+
 // error
 pub const EPERM: i32 = 1;  /* Operation not permitted */
-pub const ENOENT: i32 = 2;  /* No such file or directory */
+pub const ENOENT: i32 = 2;  /* No such fs or directory */
 pub const ESRCH: i32 = 3;  /* No such process */
 pub const EINTR: i32 = 4;  /* Interrupted system call */
 pub const EIO: i32 = 5;  /* I/O error */
 pub const ENXIO: i32 = 6;  /* No such device or address */
 pub const E2BIG: i32 = 7;  /* Argument list too long */
 pub const ENOEXEC: i32 = 8;  /* Exec format error */
-pub const EBADF: i32 = 9;  /* Bad file number */
+pub const EBADF: i32 = 9;  /* Bad fs number */
 pub const ECHILD: i32 = 10;  /* No child processes */
 pub const EAGAIN: i32 = 11;  /* Try again */
 pub const ENOMEM: i32 = 12;  /* Out of memory */
@@ -24,11 +52,11 @@ pub const EINVAL: i32 = 22;  /* Invalid argument */
 pub const ENFILE: i32 = 23;  /* File table overflow */
 pub const EMFILE: i32 = 24;  /* Too many open files */
 pub const ENOTTY: i32 = 25;  /* Not a typewriter */
-pub const ETXTBSY: i32 = 26;  /* Text file busy */
+pub const ETXTBSY: i32 = 26;  /* Text fs busy */
 pub const EFBIG: i32 = 27;  /* File too large */
 pub const ENOSPC: i32 = 28;  /* No space left on device */
 pub const ESPIPE: i32 = 29;  /* Illegal seek */
-pub const EROFS: i32 = 30;  /* Read-only file system */
+pub const EROFS: i32 = 30;  /* Read-only fs system */
 pub const EMLINK: i32 = 31;  /* Too many links */
 pub const EPIPE: i32 = 32;  /* Broken pipe */
 pub const EDOM: i32 = 33;  /* Math argument out of domain of func */
@@ -57,7 +85,7 @@ pub const ENOANO: i32 = 55;  /* No anode */
 pub const EBADRQC: i32 = 56;  /* Invalid request code */
 pub const EBADSLT: i32 = 57;  /* Invalid slot */
 pub const EDEADLOCK: i32 = 58; /* Resource deadlock would occur */
-pub const EBFONT: i32 = 59;  /* Bad font file format */
+pub const EBFONT: i32 = 59;  /* Bad font fs format */
 pub const ENOSTR: i32 = 60;  /* Device not a stream */
 pub const ENODATA: i32 = 61;  /* No data available */
 pub const ETIME: i32 = 62;  /* Timer expired */
@@ -114,11 +142,11 @@ pub const EHOSTDOWN: i32 = 112; /* Host is down */
 pub const EHOSTUNREACH: i32 = 113; /* No route to host */
 pub const EALREADY: i32 = 114; /* Operation already in progress */
 pub const EINPROGRESS: i32 = 115; /* Operation now in progress */
-pub const ESTALE: i32 = 116; /* Stale NFS file handle */
+pub const ESTALE: i32 = 116; /* Stale NFS fs handle */
 pub const EUCLEAN: i32 = 117; /* Structure needs cleaning */
-pub const ENOTNAM: i32 = 118; /* Not a XENIX named type file */
+pub const ENOTNAM: i32 = 118; /* Not a XENIX named type fs */
 pub const ENAVAIL: i32 = 119; /* No XENIX semaphores available */
-pub const EISNAM: i32 = 120; /* Is a named type file */
+pub const EISNAM: i32 = 120; /* Is a named type fs */
 pub const EREMOTEIO: i32 = 121; /* Remote I/O error */
 pub const EDQUOT: i32 = 122; /* Quota exceeded */
 pub const ENOMEDIUM: i32 = 123; /* No medium found */
@@ -130,38 +158,3 @@ pub const EKEYREVOKED: i32 = 128; /* Key has been revoked */
 pub const EKEYREJECTED: i32 = 129; /* Key was rejected by service */
 pub const EOWNERDEAD: i32 = 130; /* Owner died */
 pub const ENOTRECOVERABLE: i32 = 131; /* State not recoverable */
-pub const ESKMSG: i32 = 132; /* Scheme-kernel message code */
-
-
-// signal
-pub const SIGHUP: usize =   1;
-pub const SIGINT: usize =   2;
-pub const SIGQUIT: usize =  3;
-pub const SIGILL: usize =   4;
-pub const SIGTRAP: usize =  5;
-pub const SIGABRT: usize =  6;
-pub const SIGBUS: usize =   7;
-pub const SIGFPE: usize =   8;
-pub const SIGKILL: usize =  9;
-pub const SIGUSR1: usize =  10;
-pub const SIGSEGV: usize =  11;
-pub const SIGUSR2: usize =  12;
-pub const SIGPIPE: usize =  13;
-pub const SIGALRM: usize =  14;
-pub const SIGTERM: usize =  15;
-pub const SIGSTKFLT: usize= 16;
-pub const SIGCHLD: usize =  17;
-pub const SIGCONT: usize =  18;
-pub const SIGSTOP: usize =  19;
-pub const SIGTSTP: usize =  20;
-pub const SIGTTIN: usize =  21;
-pub const SIGTTOU: usize =  22;
-pub const SIGURG: usize =   23;
-pub const SIGXCPU: usize =  24;
-pub const SIGXFSZ: usize =  25;
-pub const SIGVTALRM: usize= 26;
-pub const SIGPROF: usize =  27;
-pub const SIGWINCH: usize = 28;
-pub const SIGIO: usize =    29;
-pub const SIGPWR: usize =   30;
-pub const SIGSYS: usize =   31;

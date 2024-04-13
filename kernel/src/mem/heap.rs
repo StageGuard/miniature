@@ -1,17 +1,19 @@
 use core::alloc::GlobalAlloc;
 
 use buddy_alloc::{BuddyAllocParam, FastAllocParam, NonThreadsafeAlloc};
+use buddy_alloc::buddy_alloc::BuddyAlloc;
 use lazy_static::lazy_static;
 use shared::uni_processor::UPSafeCell;
 use spin::Mutex;
 
-const RT_HEAP_SIZE: usize = 0x10_8000;
-static mut RT_HEAP_SPACE: [u8; RT_HEAP_SIZE] = [0; RT_HEAP_SIZE];
+const RT_HEAP_SIZE: usize = 0x100_8000;
+const RT_HEAP_FAST_SIZE: usize = 0x8000;
+pub static mut RT_HEAP_SPACE: [u8; RT_HEAP_SIZE] = [0; RT_HEAP_SIZE];
 
 lazy_static! {
     static ref RUNTIME_HEAP_ALLOC: UPSafeCell<LockedGlobalAlloc> = unsafe {
-        let fast_param = FastAllocParam::new(RT_HEAP_SPACE.as_ptr(), 0x10_0000);
-        let buddy_param = BuddyAllocParam::new(RT_HEAP_SPACE[0x10_0000..].as_ptr(), 0x8000, 32);
+        let fast_param = FastAllocParam::new(RT_HEAP_SPACE[(RT_HEAP_SIZE - RT_HEAP_FAST_SIZE)..].as_ptr(), RT_HEAP_FAST_SIZE);
+        let buddy_param = BuddyAllocParam::new(RT_HEAP_SPACE[..].as_ptr(), RT_HEAP_SIZE - RT_HEAP_FAST_SIZE, 32);
         UPSafeCell::new(LockedGlobalAlloc::new(NonThreadsafeAlloc::new(fast_param, buddy_param)))
     };
 }

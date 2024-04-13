@@ -120,12 +120,12 @@ where
     /// 如果 [reverse] 为 true，则从页表末尾开始找
     /// 找不到可以用的 PTE 会返回 None
     pub fn find_free_space_and_mark(&mut self, size: usize, reverse: bool)-> Option<(PageTableIndex, usize)> {
-        // calculate required count of child PageTableEnry to index the size of memory
+        // calculate required count of child PageTableEntry to index the size of memory
         let each_pte_max_size = self.total_available_mem_size();
         let required_pte_size = (size + (each_pte_max_size - 1)) / each_pte_max_size;
         
         if i32::from(self.last_available_index as u16) - i32::from(self.first_available_index as u16) + 1 < i32::from(required_pte_size as u16) {
-            // not available child PageTableEnry to distrubute
+            // not available child PageTableEntry to distribute
             return None
         }
 

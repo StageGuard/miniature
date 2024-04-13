@@ -40,6 +40,7 @@ macro_rules! qemu_print {
 #[macro_export]
 macro_rules! qemu_println {
     ($fmt: literal $(, $($arg: tt)+)?) => {{
+        use ::core::fmt::Write;
         $crate::device::qemu::STDIO_PORT.lock().write_fmt(format_args!(concat!($fmt, "\n") $(, $($arg)+)?));
     }};
 }

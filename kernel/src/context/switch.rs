@@ -1,3 +1,4 @@
+use alloc::sync::Arc;
 use core::arch::asm;
 use core::cell::Cell;
 use core::hint::spin_loop;
@@ -6,12 +7,17 @@ use core::mem::offset_of;
 use core::ops::Bound;
 use core::ptr::{addr_of, addr_of_mut};
 use core::sync::atomic::{AtomicBool, Ordering};
+use log::info;
+use spin::RwLockWriteGuard;
 use spinning_top::guard::ArcRwSpinlockWriteGuard;
 use shared::print_panic::PrintPanic;
 use crate::context::{Context, ContextId, ContextRegisters};
 use crate::context::list::context_storage;
 use crate::cpu::{LogicalCpuId, PercpuBlock};
+use crate::device::qemu::{exit_qemu, QemuExitCode};
 use crate::gdt::pcr;
+use crate::{infohart, qemu_println};
+use crate::mem::user_addr_space::RwLockUserAddrSpace;
 
 // if is in context switch, preventing multiple call to [`switch_context`]
 static CONTEXT_SWITCH_LOCK: AtomicBool = AtomicBool::new(false);
@@ -115,8 +121,10 @@ pub unsafe fn switch_context() -> SwitchResult {
             let mut ctx = ctx_lock.write_arc();
 
             if let Ok(signal_deliverable) = upgrade_runnable(&mut *ctx, percpu.cpu_id) {
+                infohart!("selected: prev: {:?}, curr: {:?}", prev_context.id, ctx.id);
                 selected_switch_context = Some((prev_context, ctx));
                 percpu.context_switch.switch_signal.set(signal_deliverable);
+
                 break
             }
         }
@@ -155,18 +163,22 @@ pub unsafe fn switch_context() -> SwitchResult {
         if let Some(ref stack) = next_ctx_unguarded.kstack {
             pcr.set_tss_stack((stack.as_ptr() as usize + stack.len()) as u64);
         }
-        pcr.set_userspace_io_allowed(next_ctx_unguarded.regs.userspace_io_allowed);
+        pcr.set_userspace_io_allowed(next_ctx_unguarded.ctx_regs.userspace_io_allowed);
 
         // save gs and fs
         asm!(
             "
             mov ecx, {MSR_FSBASE}
+            rdmsr
+            mov [{prev}+{fsbase_off}], eax
             mov rdx, [{next}+{fsbase_off}]
             mov eax, edx
             shr rdx, 32
             wrmsr
 
             mov ecx, {MSR_KERNEL_GSBASE}
+            rdmsr
+            mov [{prev}+{gsbase_off}], eax
             mov rdx, [{next}+{gsbase_off}]
             mov eax, edx
             shr rdx, 32
@@ -175,14 +187,15 @@ pub unsafe fn switch_context() -> SwitchResult {
             out("rax") _,
             out("rdx") _,
             out("ecx") _,
-            next = in(reg) addr_of!(next_ctx_unguarded.regs),
+            prev = in(reg) addr_of!(prev_ctx_unguarded.ctx_regs),
+            next = in(reg) addr_of!(next_ctx_unguarded.ctx_regs),
             MSR_FSBASE = const 0xc0000100u32, // IA32_FS_BASE,
             MSR_KERNEL_GSBASE = const 0xc0000102u32, // IA32_KERNEL_GSBASE,
             gsbase_off = const offset_of!(ContextRegisters, gsbase),
             fsbase_off = const offset_of!(ContextRegisters, fsbase),
         );
 
-        switch_context_inner(&mut prev_ctx_unguarded.regs, &mut next_ctx_unguarded.regs);
+        switch_context_inner(&mut prev_ctx_unguarded.ctx_regs, &mut next_ctx_unguarded.ctx_regs);
 
         // NOTE: After switch_to is called, the return address can even be different from the
         // current return address, meaning that we cannot use local variables here, and that we
@@ -270,9 +283,24 @@ unsafe extern "sysv64" fn switch_context_inner(
 }
 
 pub unsafe extern "C" fn post_switch_context() {
-    if let Some(switch_result) = PercpuBlock::current().context_switch.switch_result.take() {
-        drop(switch_result);
-    }
+    let percpu = PercpuBlock::current();
+    let switch_result = percpu.context_switch.switch_result.take();
+
     CONTEXT_SWITCH_LOCK.store(false, Ordering::SeqCst);
 
+    if let Some(result) = switch_result {
+        let cmp = match (&result.prev_ctx.addrsp, &result.next_ctx.addrsp) {
+            (Some(ref p), Some(ref n)) => Arc::ptr_eq(p, n),
+            (Some(_), None) | (None, Some(_)) => false,
+            (None, None) => true
+        };
+
+        if cmp { return }
+
+        let next_ctx_guard = result.next_ctx;
+        if let Some(addrsp) = &next_ctx_guard.addrsp {
+            let mut write = addrsp.acquire_write();
+            write.validate();
+        }
+    }
 }

@@ -34,9 +34,7 @@ use crate::fs::{open_sfs, load_file_sfs};
 use crate::kernel::load_kernel_to_virt_mem;
 use crate::mem::frame_allocator::LinearIncFrameAllocator;
 use crate::mem::page_allocator;
-use crate::mem::runtime_map::{
-    alloc_and_map_kernel_stack, init_gdt, map_framebuffer, map_kernel_arg, map_physics_memory
-};
+use crate::mem::runtime_map::{alloc_and_map_kernel_stack, init_gdt, map_bootstrap, map_framebuffer, map_kernel_arg, map_physics_memory};
 use shared::print_panic::PrintPanic;
 use crate::framebuffer::locate_framebuffer;
 use crate::logger::{init_framebuffer_logger, init_uefi_services_logger};
@@ -104,6 +102,11 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
     };
     info!("loaded kernel to physics address: 0x{:x}", &kernel[0] as *const _ as usize);
 
+    let bootstrap = match load_file_sfs(&system_table, &mut fs, "bootstrap") {
+        None => panic!("bootstrap is not found in current loaded image!"),
+        Some(bootstrap_slice) => bootstrap_slice
+    };
+
     debug!("exiting boot services");
     let (system_table, mut memory_map) = system_table.exit_boot_services(MemoryType::LOADER_DATA);
     allocator::exit_boot_services();
@@ -141,12 +144,24 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         Efer::update(|efer| *efer |= EferFlags::NO_EXECUTE_ENABLE );
         // Make the kernel respect the write-protection bits even when in ring 0 by default
         Cr0::update(|cr0| *cr0 |= Cr0Flags::WRITE_PROTECT | Cr0Flags::PROTECTED_MODE_ENABLE);
+
+        //kernel_page_table.identity_map(
+        //    kernel_pml4_table_phys_frame,
+        //    PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+        //    &mut frame_allocator
+        //)
+        //    .or_panic("failed to identity map kernel pml4 table")
+        //    .flush();
     };
 
     // 加载内核到内核的 PML4 页表里，加载到四级页表的最后一个表项的起始，0xffff_ff80_0000_0000
     // kernel 在物理内存的地址位置，这个物理地址实际上是由 boot 阶段的 BootServices.allocate_pages 分配的
     let load_kernel = load_kernel_to_virt_mem(kernel, &mut kernel_page_table, &mut frame_allocator);
     info!("kernel entry virt addr: 0x{:x}", load_kernel.kernel_entry.as_u64());
+
+    // map bootstrap
+    let bootstrap_virt_addr = map_bootstrap(bootstrap, &mut kernel_page_table, &mut frame_allocator);
+    info!("bootstrap virt addr: 0x{:x}, len = {}", bootstrap_virt_addr.as_u64(), bootstrap.len());
 
     // map gdt, identical map
     let kernel_gdt = init_gdt(&mut kernel_page_table, &mut frame_allocator);
@@ -175,6 +190,7 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         &frame_allocator, 
         &framebuffer, 
         &kernel,
+        &bootstrap,
         acpi_settings.local_apic_base as u64,
         &acpi_settings.io_apic[..acpi_settings.io_apic_count],
         kernel_gdt.start_address().as_u64(),
@@ -203,12 +219,19 @@ fn efi_main(image_handle: Handle, mut system_table: SystemTable<Boot>) -> Status
         unav_phys_mem_regions:      unsafe { *(&regions.0 as *const _ as *const [MemoryRegion; 512]) },
         unav_phys_mem_regions_len:  regions.1,
 
+        bootstrap_base:             bootstrap_virt_addr.as_u64(),
+        bootstrap_len:              bootstrap.len(),
+
         tls_template:               load_kernel.tls_template.unwrap_or_default(),
     };
     
     // TODO: 详见 map_kernel_arg 注解
     // SAFETY: 详见 map_kernel_arg 注解
-    let kernel_arg_virt_addr: VirtAddr = map_kernel_arg(&mut unsafe { *(&kernel_arg as *const _ as *mut KernelArg) }, &mut kernel_page_table, &mut frame_allocator);
+    let kernel_arg_virt_addr: VirtAddr = map_kernel_arg(
+        &mut unsafe { *(&kernel_arg as *const _ as *mut KernelArg) },
+        &mut kernel_page_table,
+        &mut frame_allocator
+    );
 
     info!("switching to kernel entry point virt addr: 0x{:x}, arg virt addr: 0x{:x}", load_kernel.kernel_entry, kernel_arg_virt_addr);
     unsafe {
@@ -243,6 +266,7 @@ fn construct_unsafe_phys_mem_region_map<I: ExactSizeIterator<Item = MemoryDescri
     frame_allocator: &LinearIncFrameAllocator<I, MemoryDescriptor>,
     framebuffer: &Option<Framebuffer>,
     kernel_bytes: &[u8],
+    bootstrap_bytes: &[u8],
     lapic_base: u64,
     io_apics: &[MadtIoApic],
     gdt: u64,
@@ -278,9 +302,18 @@ fn construct_unsafe_phys_mem_region_map<I: ExactSizeIterator<Item = MemoryDescri
     });
 
     // 内核 elf
-    let kernel_bytes_starst_phys_addr = &kernel_bytes[0] as *const _ as u64;
+    let kernel_bytes_start_phys_addr = &kernel_bytes[0] as *const _ as u64;
     regions[curr_idx].write(MemoryRegion {
-        start: kernel_bytes_starst_phys_addr,
+        start: kernel_bytes_start_phys_addr,
+        length: kernel_bytes.len() as u64,
+        kind: MemoryRegionKind::Bootloader
+    });
+    curr_idx += 1;
+
+    // bootstrap elf
+    let bootstrap_start_phys_addr = &bootstrap_bytes[0] as *const _ as u64;
+    regions[curr_idx].write(MemoryRegion {
+        start: bootstrap_start_phys_addr,
         length: kernel_bytes.len() as u64,
         kind: MemoryRegionKind::Bootloader
     });

@@ -1,4 +1,4 @@
-use crate::syscall_module::flag::{SIGKILL, SIGSTOP};
+use libvdso::flag::{SIGKILL, SIGSTOP};
 
 #[derive(Clone, Copy, Debug)]
 pub struct SignalState {

@@ -11,12 +11,13 @@ use spinning_top::RwSpinlock;
 use shared::print_panic::PrintPanic;
 use shared::uni_processor::UPSafeCell;
 use crate::context::{Context, ContextId};
-use crate::{CPU_COUNT, warnhart};
+use crate::{CPU_COUNT, infohart, warnhart};
 use crate::mem::aligned_box::AlignedBox;
 use crate::mem::heap::OutOfMemory;
 use crate::mem::PAGE_SIZE;
 use crate::syscall::{enter_usermode, InterruptStack};
-use crate::syscall_module::flag::{EAGAIN, ENOMEM};
+use libvdso::error::{EAGAIN, ENOMEM};
+use crate::mem::user_addr_space::RwLockUserAddrSpace;
 
 lazy_static! {
     static ref CONTEXT_STORAGE: RwLock<ContextStorage> = {
@@ -125,6 +126,7 @@ impl ContextStorage {
 
         let new_context_lock = self.new_context()?;
         let mut new_context = new_context_lock.write();
+        new_context.set_addr_space(unsafe { Some(RwLockUserAddrSpace::new(&new_context_lock, 0x1000)) });
 
         let mut stack_top = unsafe { stack.as_mut_ptr().add(PAGE_SIZE * 64) };
         const INT_REGS_SIZE: usize = size_of::<InterruptStack>();
@@ -144,7 +146,7 @@ impl ContextStorage {
             stack_top.cast::<usize>().write(func as usize);
         }
 
-        new_context.regs.set_stack(stack_top as usize);
+        new_context.ctx_regs.set_stack_pointer(stack_top as usize);
         new_context.kstack = Some(stack);
         new_context.userspace = userspace_allowed;
 

@@ -4,9 +4,10 @@ use log::{debug, info};
 use uefi::table::boot::MemoryDescriptor;
 use x86_64::{align_down, align_up, registers::segmentation::{Segment, CS, DS, ES, SS}, structures::{gdt::{Descriptor, GlobalDescriptorTable}, paging::{FrameAllocator, Mapper, OffsetPageTable, Page, PageTableIndex, PhysFrame, Size2MiB, Size4KiB}}, PhysAddr, VirtAddr};
 use x86_64::structures::paging::page_table::PageTableFlags as PTFlags;
+use x86_64::structures::paging::{PageTableFlags, Size1GiB};
 
 use crate::mem::tracked_mapper::TrackedMapper;
-use shared::{arg::{KernelArg, MemoryRegion}, print_panic::PrintPanic};
+use shared::{arg::{KernelArg, MemoryRegion}, BOOTSTRAP_BYTES_P4, FRAMEBUFFER_P4, KERNEL_ARG_P4, KERNEL_BYTES_P4, KERNEL_STACK_P4, PHYS_MEM_P4, print_panic::PrintPanic};
 
 use super::frame_allocator::LinearIncFrameAllocator;
 
@@ -21,6 +22,7 @@ pub fn alloc_and_map_kernel_stack(
 
     let available_p4pti = kernel_pml4_table.find_free_space_and_mark(total_size, true)
         .or_panic("failed to get available pml4 entry for kernel stack, maybe it run out");
+    assert_eq!(PageTableIndex::new(KERNEL_STACK_P4), available_p4pti.0);
     let kernel_stack_start_page_1gb = Page::from_page_table_indices_1gib(available_p4pti.0,  PageTableIndex::new(0));
 
     let kernel_stack_start_page = Page::<Size4KiB>::containing_address(kernel_stack_start_page_1gb.start_address());
@@ -51,6 +53,16 @@ pub fn init_gdt(
         .allocate_frame()
         .or_panic("failed to allocate new physics frame for global descriptor table.");
 
+    // unsafe {
+    //     kernel_pml4_table.identity_map(
+    //         gdt_phys_frame,
+    //         PageTableFlags::PRESENT | PageTableFlags::WRITABLE,
+    //         frame_allocator
+    //     )
+    //         .or_panic("failed to identity map kernel pml4 table")
+    //         .flush();
+    // }
+
     // uefi boootloader runtime 阶段的虚拟地址和物理地址是无偏移映射的
     let gdt = unsafe {
         let ptr: *mut GlobalDescriptorTable = gdt_phys_frame.start_address().as_u64() as *mut GlobalDescriptorTable;
@@ -79,6 +91,7 @@ pub fn map_framebuffer(
 ) -> VirtAddr {
     let available_p4pti = kernel_pml4_table.find_free_space_and_mark(framebuffer.len(), true)
         .or_panic("failed to get available pml4 entry for framebuffer, maybe it run out");
+    assert_eq!(PageTableIndex::new(FRAMEBUFFER_P4), available_p4pti.0);
     let framebuffer_start_page_1gb = Page::from_page_table_indices_1gib(available_p4pti.0,  PageTableIndex::new(0));
 
     let framebuffer_start_page = Page::<Size4KiB>::containing_address(framebuffer_start_page_1gb.start_address());
@@ -112,17 +125,16 @@ pub fn map_physics_memory(
 ) -> VirtAddr {
     // bootloader runtime 阶段物理内存和虚拟内存是恒等映射
     // 用 4kb size 会让下面迭代器迭代过多次
-    let start_phys_frame = PhysFrame::<Size2MiB>::containing_address(PhysAddr::new(0));
-    let end_phys_frame = PhysFrame::<Size2MiB>::containing_address(max_phys_addr - 1u64);
+    let start_phys_frame = PhysFrame::<Size1GiB>::containing_address(PhysAddr::new(0));
+    let end_phys_frame = PhysFrame::<Size1GiB>::containing_address(max_phys_addr - 1u64);
 
     info!("physics address space size: {}", max_phys_addr.as_u64());
 
-    let available_p4pti = kernel_pml4_table.find_free_space_and_mark(max_phys_addr.as_u64() as usize, false)
-        .or_panic("failed to get available pml4 entry for full physics address space, maybe it run out");
-    let phys_start_page = Page::from_page_table_indices_1gib(available_p4pti.0,  PageTableIndex::new(0));
+    let available_p4pti = kernel_pml4_table.mark_as_unused(PHYS_MEM_P4 as usize);
+    let phys_start_page = Page::from_page_table_indices_1gib(PageTableIndex::new(PHYS_MEM_P4),  PageTableIndex::new(0));
 
     for frame in PhysFrame::range_inclusive(start_phys_frame, end_phys_frame) {
-        let page = Page::<Size2MiB>::containing_address(phys_start_page.start_address() + frame.start_address().as_u64());
+        let page = Page::<Size1GiB>::containing_address(phys_start_page.start_address() + frame.start_address().as_u64());
 
         unsafe {
             kernel_pml4_table.map_to(page, frame, PTFlags::PRESENT | PTFlags::WRITABLE, frame_allocator)
@@ -150,6 +162,7 @@ pub fn map_kernel_arg<I: ExactSizeIterator<Item = MemoryDescriptor> + Clone>(
 
     let available_p4pti = kernel_pml4_table.find_free_space_and_mark(KERNEL_ARG_LEN as usize, true)
         .or_panic("failed to get available pml4 entry for KernelArg, maybe it run out");
+    assert_eq!(PageTableIndex::new(KERNEL_ARG_P4), available_p4pti.0);
     let kernel_arg_start_page = Page::containing_address(
         Page::from_page_table_indices_1gib(available_p4pti.0, PageTableIndex::new(0)).start_address()
     );
@@ -184,4 +197,34 @@ pub fn map_kernel_arg<I: ExactSizeIterator<Item = MemoryDescriptor> + Clone>(
     kernel_arg.unav_phys_mem_regions[..kernel_arg.unav_phys_mem_regions_len].sort_unstable_by_key(|r| r.start);
 
     kernel_arg_start_page.start_address() + (kernel_arg_phys_addr - align_down(kernel_arg_phys_addr, 4096))
+}
+
+pub fn map_bootstrap(
+    bootstrap: &[u8],
+    kernel_pml4_table: &mut TrackedMapper<OffsetPageTable>,
+    frame_allocator: &mut impl FrameAllocator<Size4KiB>
+) -> VirtAddr {
+    let available_p4pti = kernel_pml4_table.find_free_space_and_mark(bootstrap.len(), true)
+        .or_panic("failed to get available pml4 entry for KernelArg, maybe it run out");
+    assert_eq!(PageTableIndex::new(BOOTSTRAP_BYTES_P4), available_p4pti.0);
+    let kernel_arg_start_page = Page::containing_address(
+        Page::from_page_table_indices_1gib(available_p4pti.0, PageTableIndex::new(0)).start_address()
+    );
+
+    let bs_phys_addr_start = PhysAddr::new(&bootstrap[0] as *const _ as u64);
+    let bs_phys_frame_start = PhysFrame::containing_address(bs_phys_addr_start);
+    let bs_phys_frame_end = PhysFrame::containing_address(bs_phys_addr_start + bootstrap.len());
+
+    for frame in PhysFrame::<Size4KiB>::range_inclusive(bs_phys_frame_start, bs_phys_frame_end) {
+        let page: Page<Size4KiB> = kernel_arg_start_page + (frame - bs_phys_frame_start);
+
+        unsafe {
+            kernel_pml4_table
+                .map_to(page, frame, PTFlags::PRESENT, frame_allocator)
+                .or_panic("failed to identity map new allocated bootstrap.")
+                .flush();
+        }
+    }
+
+    kernel_arg_start_page.start_address() + (bs_phys_addr_start.as_u64() - bs_phys_frame_start.start_address().as_u64())
 }

@@ -5,6 +5,7 @@ use shared::{print_panic::PrintPanic};
 use spin::{Mutex, RwLock};
 use x86_64::{registers::control::Cr2, structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode}, VirtAddr};
 use core::{fmt::Write};
+use core::arch::asm;
 
 use crate::{acpi::local_apic::LOCAL_APIC, cpu::LogicalCpuId, device::qemu::exit_qemu, gdt::{pcr}, halt, infohart, mem::{frame_allocator::frame_alloc_n, PAGE_SIZE}, qemu_print, qemu_println};
 use crate::arch_spec::port::inb;
@@ -98,6 +99,22 @@ pub unsafe fn write_idt_gate(cpu_id: LogicalCpuId, entry_index: usize, handler: 
     let idt = idt_list_guard.get_mut(&cpu_id).unwrap();
 
     idt[entry_index].set_handler_addr(VirtAddr::new(handler));
+}
+
+/// Set interrupts and halt
+/// This will atomically wait for the next interrupt
+/// Performing enable followed by halt is not guaranteed to be atomic, use this instead!
+#[inline(always)]
+pub unsafe fn enable_and_halt() {
+    core::arch::asm!("sti; hlt", options(nomem, nostack));
+}
+
+/// Set interrupts and nop
+/// This will enable interrupts and allow the IF flag to be processed
+/// Simply enabling interrupts does not gurantee that they will trigger, use this instead!
+#[inline(always)]
+pub unsafe fn enable_and_nop() {
+    core::arch::asm!("sti; nop", options(nomem, nostack));
 }
 
 macro_rules! interrupt {

@@ -1,4 +1,5 @@
 use core::alloc::{GlobalAlloc, Layout};
+use log::info;
 
 use crate::mem::unique::Unique;
 use crate::mem::heap::{HEAP_ALLOC, OutOfMemory};
@@ -38,8 +39,7 @@ impl<T, const ALIGN: usize> AlignedBox<T, ALIGN> {
             T: ValidForZero,
     {
         Ok(unsafe {
-            let ptr =
-                HEAP_ALLOC.alloc_zeroed(layout_upgrade_align(Layout::new::<T>(), ALIGN));
+            let ptr = HEAP_ALLOC.alloc_zeroed(layout_upgrade_align(Layout::new::<T>(), ALIGN));
             if ptr.is_null() {
                 return Err(OutOfMemory);
             }

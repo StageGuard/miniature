@@ -1,11 +1,14 @@
 use core::{mem::{transmute, MaybeUninit}, ops::Range};
+use core::cell::RefMut;
 use lazy_static::lazy_static;
 use log::{error, info};
 use shared::{arg::MemoryRegion, uni_processor::UPSafeCell};
-use spin::Mutex;
+use spin::{Mutex, Once};
 use x86_64::{structures::paging::{FrameAllocator, PhysFrame, Size4KiB}, PhysAddr, VirtAddr};
+use crate::mem::PAGE_SIZE;
 
 const MAX_RANGE_COUNT: usize = 512;
+pub static PHYS_MEM_SIZE: Once<u64> = Once::new();
 
 lazy_static! {
     pub static ref FRAME_ALLOCATOR: UPSafeCell<Mutex<MaybeUninit<LinearIncFrameAllocator>>> = unsafe { UPSafeCell::new(Mutex::new(MaybeUninit::uninit())) };
@@ -190,12 +193,13 @@ pub fn init_frame_allocator(
     phys_mem_size: u64,
     mem_regions: &[MemoryRegion]
 ) {
-    let allocator = LinearIncFrameAllocator::new(phys_start_addr, 0x1000, phys_mem_size, mem_regions);
+    let allocator = LinearIncFrameAllocator::new(phys_start_addr, PAGE_SIZE as u64, phys_mem_size, mem_regions);
 
-    let global_alloc: core::cell::RefMut<'_, spin::mutex::Mutex<MaybeUninit<LinearIncFrameAllocator>>> = FRAME_ALLOCATOR.inner_exclusive_mut();
+    let global_alloc: RefMut<'_, Mutex<MaybeUninit<LinearIncFrameAllocator>>> = FRAME_ALLOCATOR.inner_exclusive_mut();
     let mut locked = global_alloc.lock();
     locked.write(allocator);
 
+    PHYS_MEM_SIZE.call_once(|| phys_mem_size);
     info!("frame allocator is initialized. phys mem size: {}", phys_mem_size);
 }
 

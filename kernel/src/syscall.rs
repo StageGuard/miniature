@@ -1,17 +1,15 @@
 use core::arch::asm;
 use core::mem::offset_of;
 use log::info;
+use x86_64::PrivilegeLevel;
 use x86_64::PrivilegeLevel::Ring3;
 use x86_64::registers::rflags::RFlags;
 use x86_64::registers::segmentation::SegmentSelector;
 use x86_64::structures::tss::TaskStateSegment;
+use shared::print_panic::PrintPanic;
 use crate::arch_spec::msr::{rdmsr, wrmsr};
-use crate::gdt::{pcr, ProcessorControlRegion};
+use crate::gdt::{GDT_USER_CODE, GDT_USER_DATA, pcr, ProcessorControlRegion};
 use crate::infohart;
-
-/*
- https://gitlab.redox-os.org/redox-os/kernel/-/blob/master/src/arch/x86_64/interrupt/syscall.rs
- */
 
 #[derive(Default)]
 #[repr(C)]
@@ -64,8 +62,8 @@ impl InterruptStack {
     pub fn init(&mut self) {
         // Always enable interrupts!
         self.iret.rflags = RFlags::INTERRUPT_FLAG.bits() as usize;
-        self.iret.cs = (4 << 3) | 3; // GDT[4] = GDT_USER_CODE
-        self.iret.ss = (5 << 3) | 3; // GDT[5] = GDT_USER_DATA
+        self.iret.cs = GDT_USER_CODE.get().or_panic("failed to get user code segment sector").0 as usize;
+        self.iret.ss = GDT_USER_DATA.get().or_panic("failed to get user data segment sector").0 as usize;
     }
     pub fn set_stack_pointer(&mut self, rsp: usize) {
         self.iret.rsp = rsp;
@@ -95,7 +93,7 @@ pub unsafe extern "C" fn __inner_syscall_instruction(stack: *mut InterruptStack)
         &stack_ref.scratch.r8
     ];
 
-    infohart!("syscall_module: arg = {:?}", args);
+    infohart!("syscall: args = {:?}", args);
 
     stack_ref.set_syscall_ret_reg(0);
 }
@@ -168,7 +166,7 @@ pub unsafe extern "C" fn syscall_instruction() {
         // Otherwise, continue with the fast sysretq.
 
         // Pop userspace return pointer
-        "pop rcx;",
+        "pop rcx;", // InterruptStack.iret.rip
 
         // We must ensure RCX is canonical; if it is not when running sysretq, the consequences can be
         // fatal from a security perspective.
@@ -184,14 +182,14 @@ pub unsafe extern "C" fn syscall_instruction() {
         // 63:48 (0x8000_DEAD_BEEF_XXXX => 0xFFFF_8000_DEAD_BEEF).
         "sar rcx, 16;",
 
-        "add rsp, 8;",              // Pop fake userspace CS
-        "pop r11;",                 // Pop rflags
-        "pop rsp;",                 // Restore userspace stack pointer
+        "add rsp, 8;",              // Pop fake userspace CS, skip InterruptStack.iret.cs
+        "pop r11;",                 // Pop rflags, InterruptStack.iret.rflags
+        "pop rsp;",                 // Restore userspace stack pointer, InterruptStack.iret.rsp
         "sysretq;",                 // Return into userspace; RCX=>RIP,R11=>RFLAGS
 
         // IRETQ fallback:
         "
-        .p2align 4
+    .p2align 4
     1:
         xor rcx, rcx
         xor r11, r11
@@ -200,8 +198,8 @@ pub unsafe extern "C" fn syscall_instruction() {
 
         sp = const(offset_of!(ProcessorControlRegion, user_rsp_tmp)),
         ksp = const(offset_of!(ProcessorControlRegion, tss) + offset_of!(TaskStateSegment, privilege_stack_table)),
-        ss_sel = const(SegmentSelector::new(5, Ring3).0),
         cs_sel = const(SegmentSelector::new(4, Ring3).0),
+        ss_sel = const(SegmentSelector::new(5, Ring3).0),
 
         options(noreturn),
     );

@@ -53,7 +53,7 @@ pub fn load_file_sfs(
     
     let file_handle = match root.open(filename, FileMode::Read, FileAttribute::empty()) {
         Err(e) => {
-            warn!("cannot open file {}: {}", &*filename, e);
+            warn!("cannot open fs {}: {}", &*filename, e);
             return None
         },
         Ok(handle) => handle,
@@ -62,7 +62,7 @@ pub fn load_file_sfs(
     let mut file = match file_handle.into_type().unwrap() {
         FileType::Regular(f) => f,
         FileType::Dir(_) => {
-            warn!("open file {} which is directory", &*filename);
+            warn!("open fs {} which is directory", &*filename);
             return None
         },
     };

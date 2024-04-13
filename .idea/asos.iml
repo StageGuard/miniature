@@ -6,6 +6,8 @@
       <sourceFolder url="file://$MODULE_DIR$/build-image/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/kernel/src" isTestSource="false" />
       <sourceFolder url="file://$MODULE_DIR$/shared/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/bootstrap/src" isTestSource="false" />
+      <sourceFolder url="file://$MODULE_DIR$/libvdso/src" isTestSource="false" />
       <excludeFolder url="file://$MODULE_DIR$/bootloader-efi/target" />
       <excludeFolder url="file://$MODULE_DIR$/easy-fs-fuse/target" />
       <excludeFolder url="file://$MODULE_DIR$/easy-fs/target" />

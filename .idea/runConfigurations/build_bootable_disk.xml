@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="build bootable disk" type="CargoCommandRunConfiguration" factoryName="Cargo Command">
-    <option name="command" value="run --bin build-image -- &quot;EFI/BOOT/BOOTX64.EFI-&gt;target/x86_64-unknown-uefi/debug/bootloader.efi;kernel-x86_64-&gt;target/x86_64-myos/debug/kernel&quot; &quot;target/asos.img&quot;" />
+    <option name="command" value="run --bin build-image -- &quot;EFI/BOOT/BOOTX64.EFI-&gt;target/x86_64-unknown-uefi/debug/bootloader.efi;kernel-x86_64-&gt;target/x86_64-myos/debug/kernel;bootstrap-&gt;target/x86_64-unknown-none/debug/bootstrap&quot; &quot;target/asos.img&quot;" />
     <option name="workingDirectory" value="file://$PROJECT_DIR$" />
     <envs />
     <option name="emulateTerminal" value="true" />

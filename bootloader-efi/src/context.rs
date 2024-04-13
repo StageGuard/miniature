@@ -1,6 +1,7 @@
 use core::arch::asm;
 
 use x86_64::structures::paging::PhysFrame;
+use x86_64::VirtAddr;
 
 /// # SAFETY
 /// we assumes all these address are valid

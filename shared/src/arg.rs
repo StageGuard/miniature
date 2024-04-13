@@ -87,6 +87,10 @@ pub struct KernelArg {
     pub unav_phys_mem_regions: [MemoryRegion; 512],
     pub unav_phys_mem_regions_len: usize,
 
+    // bootstrap
+    pub bootstrap_base: u64,
+    pub bootstrap_len: usize,
+
     pub tls_template: TlsTemplate
 }
 

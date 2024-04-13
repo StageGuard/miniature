@@ -1,16 +1,23 @@
+use alloc::sync::Arc;
+use core::mem;
 use core::sync::atomic::AtomicUsize;
+use bitflags::Flags;
+use x86_64::PhysAddr;
+use x86_64::registers::control::{Cr3, Cr3Flags};
+use x86_64::structures::paging::PhysFrame;
 use crate::context::list::context_storage_mut;
 use crate::mem::aligned_box::AlignedBox;
 use crate::context::signal::SignalState;
 use crate::context::status::{HardBlockedReason, Status};
 use crate::cpu::{LogicalCpuId, PercpuBlock};
 use crate::int_like;
-use crate::mem::PAGE_SIZE;
-use crate::mem::user_addr_space::ArcRwLockUserAddrSpace;
+use crate::mem::{get_kernel_pml4_page_table_addr, PAGE_SIZE};
+use crate::mem::user_addr_space::{RwLockUserAddrSpace, UserAddrSpace};
+use crate::syscall::InterruptStack;
 
 pub mod list;
 pub mod switch;
-mod status;
+pub mod status;
 mod signal;
 
 int_like!(ContextId, AtomicContextId, usize, AtomicUsize);
@@ -32,12 +39,12 @@ pub struct Context {
     // signal state
     pub signal: SignalState,
     // registers
-    pub regs: ContextRegisters,
+    pub ctx_regs: ContextRegisters,
     // All contexts except kmain will primarily live in userspace, and enter the kernel only when
     // interrupts or syscall occur. This flag is set for all contexts but kmain.
     pub userspace: bool,
     // address space
-    pub addrsp: Option<ArcRwLockUserAddrSpace>,
+    pub addrsp: Option<Arc<RwLockUserAddrSpace>>,
 }
 
 impl Context {
@@ -53,7 +60,7 @@ impl Context {
                 pending: 0,
                 procmask: !0
             },
-            regs: ContextRegisters::new(),
+            ctx_regs: ContextRegisters::new(),
             userspace: false,
             addrsp: None
         }
@@ -101,6 +108,54 @@ impl Context {
         } else {
             false
         }
+    }
+
+    pub fn set_addr_space(&mut self, addrsp: Option<Arc<RwLockUserAddrSpace>>) -> Option<Arc<RwLockUserAddrSpace>> {
+        if let (Some(ref old), Some(ref new)) = (&self.addrsp, &addrsp) {
+            if Arc::ptr_eq(old, new) {
+                return addrsp;
+            }
+        }
+
+        if self.id == context_id() {
+            if let Some(ref new) = addrsp {
+                let mut new_addrsp = new.acquire_write();
+                unsafe { new_addrsp.validate(); }
+            } else {
+                let phys_addr = PhysAddr::new(get_kernel_pml4_page_table_addr());
+                unsafe { Cr3::write(PhysFrame::containing_address(phys_addr), Cr3Flags::empty()); }
+            }
+        } else {
+            assert!(!self.running);
+        }
+
+        mem::replace(&mut self.addrsp, addrsp)
+    }
+
+    fn can_access_regs(&self) -> bool {
+        self.userspace
+    }
+
+    pub fn regs(&self) -> Option<&InterruptStack> {
+        if !self.can_access_regs() {
+            return None;
+        }
+        let Some(ref kstack) = self.kstack else {
+            return None;
+        };
+        let range = kstack.len().checked_sub(mem::size_of::<InterruptStack>())?..;
+        Some(unsafe { &*kstack.get(range)?.as_ptr().cast() })
+    }
+
+    pub fn regs_mut(&mut self) -> Option<&mut InterruptStack> {
+        if !self.can_access_regs() {
+            return None;
+        }
+        let Some(ref mut kstack) = self.kstack else {
+            return None;
+        };
+        let range = kstack.len().checked_sub(mem::size_of::<InterruptStack>())?..;
+        Some(unsafe { &mut *kstack.get_mut(range)?.as_mut_ptr().cast() })
     }
 }
 
@@ -153,7 +208,7 @@ impl ContextRegisters {
         }
     }
 
-    pub fn set_stack(&mut self, address: usize) {
+    pub fn set_stack_pointer(&mut self, address: usize) {
         self.rsp = address;
     }
 }
