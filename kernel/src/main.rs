@@ -9,6 +9,7 @@
 #![feature(custom_test_frameworks)]
 #![feature(maybe_uninit_uninit_array)]
 #![feature(step_trait)]
+#![feature(slice_ptr_get)]
 #![test_runner(crate::test_runner)]
 #![reexport_test_harness_main = "test_main"]
 
@@ -31,8 +32,9 @@ use mem::frame_allocator::init_frame_allocator;
 use shared::{arg::KernelArg, BOOTSTRAP_BYTES_P4};
 
 use x86_64::{instructions::{self, interrupts::{self}}, VirtAddr};
+use x86_64::instructions::tlb;
 use x86_64::structures::paging::page_table::PageTableEntry;
-use x86_64::structures::paging::PageTable;
+use x86_64::structures::paging::{Page, PageTable, PageTableFlags, Size4KiB};
 use shared::print_panic::PrintPanic;
 
 use crate::{arch_spec::cpuid::cpu_info, framebuffer::{init_framebuffer}, logger::{init_framebuffer_logger}};
@@ -46,8 +48,10 @@ use crate::cpu::{LogicalCpuId, PercpuBlock};
 use crate::device::com::init_com;
 use crate::interrupt::{enable_and_halt, enable_and_nop};
 use crate::ipi::{ipi, ipi_single, IpiKind, IpiTarget};
-use crate::mem::load_elf::map_elf_to_addrsp;
-use crate::mem::{get_kernel_pml4_page_table_addr, set_kernel_pml4_page_table};
+use crate::mem::load_elf::elf_copy_to_addrsp;
+use crate::mem::{get_kernel_pml4_page_table_addr, PAGE_SIZE, set_kernel_pml4_page_table};
+use crate::mem::aligned_box::AlignedBox;
+use crate::mem::heap::RT_HEAP_SPACE;
 use crate::mem::user_addr_space::RwLockUserAddrSpace;
 use crate::syscall::init_syscall;
 
@@ -66,6 +70,7 @@ mod context;
 mod common;
 mod ipi;
 mod fs;
+mod interrupt_macro;
 
 extern crate alloc;
 
@@ -159,7 +164,7 @@ pub extern "C" fn _start(arg: &'static KernelArg) -> ! {
 
                     addrsp_pt_0_pml3[511] = kpt_bsp4_pml3[0].clone();
                     // 0x7fc0000000 是 PageTable[0][511] 1gb 页的起始虚拟地址
-                    BOOTSTRAP_USR_ADDRSP_BASE.call_once(|| 0x7fc0000000);
+                    BOOTSTRAP_USR_ADDRSP_BASE.call_once(|| 0x7f_c000_0000);
                 }
                 None => panic!("user address space of bootstrap context is not found.")
             }
@@ -228,9 +233,21 @@ extern "C" fn userspace_init() {
                 .or_panic("failed to get bootstrap length")
                 .len()
         );
-        map_elf_to_addrsp(bootstrap_slice_user_addrsp, addrsp)
+        elf_copy_to_addrsp(bootstrap_slice_user_addrsp, addrsp)
     };
     infohart!("bootstrap entry: 0x{:x}", bootstrap_entry.as_u64());
+
+    // validate
+    {
+        match context_read.addrsp {
+            None => panic!("failed to get address space of userspace init context"),
+            Some(ref rsp) => unsafe {
+                let mut rsp = Arc::clone(rsp);
+                let mut rsp_guard = rsp.acquire_write();
+                rsp_guard.validate();
+            }
+        };
+    }
 
     drop(context_read);
 

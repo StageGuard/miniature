@@ -1,15 +1,21 @@
 use core::arch::asm;
+use core::fmt::{Debug, Formatter, LowerHex, write};
 use core::mem::offset_of;
+use core::slice::from_raw_parts;
 use log::info;
-use x86_64::PrivilegeLevel;
+use x86_64::{PhysAddr, PrivilegeLevel};
 use x86_64::PrivilegeLevel::Ring3;
 use x86_64::registers::rflags::RFlags;
 use x86_64::registers::segmentation::SegmentSelector;
+use x86_64::structures::paging::{PhysFrame, Size4KiB};
 use x86_64::structures::tss::TaskStateSegment;
+use libvdso::error::{KError, KResult};
 use shared::print_panic::PrintPanic;
 use crate::arch_spec::msr::{rdmsr, wrmsr};
-use crate::gdt::{GDT_USER_CODE, GDT_USER_DATA, pcr, ProcessorControlRegion};
-use crate::infohart;
+use crate::gdt::{GDT_USER_CODE64, GDT_USER_DATA, pcr, ProcessorControlRegion};
+use crate::{infohart, push_scratch, push_preserved, pop_scratch, pop_preserved, qemu_println};
+use crate::cpu::PercpuBlock;
+use crate::mem::PAGE_SIZE;
 
 #[derive(Default)]
 #[repr(C)]
@@ -17,6 +23,16 @@ pub struct InterruptStack {
     pub preserved: PreservedRegisters,
     pub scratch: ScratchRegisters,
     pub iret: IretRegisters,
+}
+
+impl Debug for InterruptStack {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write(f, format_args!("INTRS {{ "))?;
+        write(f, format_args!("{:?}, ", self.preserved))?;
+        write(f, format_args!("{:?}, ", self.scratch))?;
+        write(f, format_args!("{:?}", self.iret))?;
+        write(f, format_args!(" }}"))
+    }
 }
 
 #[derive(Default)]
@@ -28,6 +44,19 @@ pub struct PreservedRegisters {
     pub r12: usize,
     pub rbp: usize,
     pub rbx: usize,
+}
+
+impl Debug for PreservedRegisters {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write(f, format_args!("PRESERVED {{ "))?;
+        write(f, format_args!("R15: 0x{:x}, ", self.r15))?;
+        write(f, format_args!("R14: 0x{:x}, ", self.r14))?;
+        write(f, format_args!("R13: 0x{:x}, ", self.r13))?;
+        write(f, format_args!("R12: 0x{:x}, ", self.r12))?;
+        write(f, format_args!("RBP: 0x{:x}, ", self.rbp))?;
+        write(f, format_args!("RBX: 0x{:x}", self.rbx))?;
+        write(f, format_args!(" }}"))
+    }
 }
 
 #[derive(Default)]
@@ -44,6 +73,22 @@ pub struct ScratchRegisters {
     pub rax: usize,
 }
 
+impl Debug for ScratchRegisters {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write(f, format_args!("SCRATCH {{ "))?;
+        write(f, format_args!("R11: 0x{:x}, ", self.r11))?;
+        write(f, format_args!("R10: 0x{:x}, ", self.r10))?;
+        write(f, format_args!("R9: 0x{:x}, ", self.r9))?;
+        write(f, format_args!("R8: 0x{:x}, ", self.r8))?;
+        write(f, format_args!("RSI: 0x{:x}, ", self.rsi))?;
+        write(f, format_args!("RDI: 0x{:x}, ", self.rdi))?;
+        write(f, format_args!("RDX: 0x{:x}, ", self.rdx))?;
+        write(f, format_args!("RCX: 0x{:x}, ", self.rcx))?;
+        write(f, format_args!("RAX: 0x{:x}", self.rax))?;
+        write(f, format_args!(" }}"))
+    }
+}
+
 #[derive(Default)]
 #[repr(C)]
 pub struct IretRegisters {
@@ -58,11 +103,23 @@ pub struct IretRegisters {
     pub ss: usize,
 }
 
+impl Debug for IretRegisters {
+    fn fmt(&self, f: &mut Formatter<'_>) -> core::fmt::Result {
+        write(f, format_args!("IRET {{ "))?;
+        write(f, format_args!("RIP: 0x{:x}, ", self.rip))?;
+        write(f, format_args!("CS: {:b}, ", self.cs))?;
+        write(f, format_args!("RFLAGS: {:b}, ", self.rflags))?;
+        write(f, format_args!("RSP: 0x{:x}, ", self.rsp))?;
+        write(f, format_args!("SS: {:b}", self.ss))?;
+        write(f, format_args!(" }}"))
+    }
+}
+
 impl InterruptStack {
     pub fn init(&mut self) {
         // Always enable interrupts!
         self.iret.rflags = RFlags::INTERRUPT_FLAG.bits() as usize;
-        self.iret.cs = GDT_USER_CODE.get().or_panic("failed to get user code segment sector").0 as usize;
+        self.iret.cs = GDT_USER_CODE64.get().or_panic("failed to get user code segment sector").0 as usize;
         self.iret.ss = GDT_USER_DATA.get().or_panic("failed to get user data segment sector").0 as usize;
     }
     pub fn set_stack_pointer(&mut self, rsp: usize) {
@@ -75,8 +132,9 @@ impl InterruptStack {
         self.iret.rip = rip;
     }
     // TODO: This can maybe be done in userspace?
-    pub fn set_syscall_ret_reg(&mut self, ret: usize) {
+    pub fn set_syscall_ret_reg(&mut self, ret: usize) -> usize {
         self.scratch.rax = ret;
+        ret
     }
 }
 
@@ -93,9 +151,14 @@ pub unsafe extern "C" fn __inner_syscall_instruction(stack: *mut InterruptStack)
         &stack_ref.scratch.r8
     ];
 
-    infohart!("syscall: args = {:?}", args);
+    PercpuBlock::current().inside_syscall.set(true);
 
-    stack_ref.set_syscall_ret_reg(0);
+    infohart!("syscall: args = {:?}", stack_ref);
+    let result = Ok(0);
+
+    PercpuBlock::current().inside_syscall.set(false);
+
+    stack_ref.set_syscall_ret_reg(KError::mux(result));
 }
 
 #[naked]
@@ -111,25 +174,12 @@ pub unsafe extern "C" fn syscall_instruction() {
         "push QWORD PTR {cs_sel};",   // Push fake CS (resembling iret stack frame)
         "push rcx;",                  // Push userspace return pointer
 
-        // Push scratch registers
+        // Push context registers
         "push rax;",
-        "push rcx;",
-        "push rdx;",
-        "push rdi;",
-        "push rsi;",
-        "push r8;",
-        "push r9;",
-        "push r10;",
-        "push r11;",
-        // Push preserved registers
-        "push rbx;",
-        "push rbp;",
-        "push r12;",
-        "push r13;",
-        "push r14;",
-        "push r15;",
+        push_scratch!(),
+        push_preserved!(),
 
-        // Call inner function
+        // Call inner funtion
         "mov rdi, rsp;",
         "call __inner_syscall_instruction;",
 
@@ -137,25 +187,11 @@ pub unsafe extern "C" fn syscall_instruction() {
     .globl enter_usermode
         enter_usermode:
         ",
+        // Pop context registers
+        pop_preserved!(),
+        pop_scratch!(),
 
-        // Pop preserved registers
-        "pop r15;",
-        "pop r14;",
-        "pop r13;",
-        "pop r12;",
-        "pop rbp;",
-        "pop rbx;",
-        // Pop scratch registers,
-        "pop r11;",
-        "pop r10;",
-        "pop r9;",
-        "pop r8;",
-        "pop rsi;",
-        "pop rdi;",
-        "pop rdx;",
-        "pop rcx;",
-        "pop rax;",
-
+        // Restore user GSBASE by swapping GSBASE and KGSBASE.
         "swapgs;",
 
         // check trap flag
@@ -198,8 +234,8 @@ pub unsafe extern "C" fn syscall_instruction() {
 
         sp = const(offset_of!(ProcessorControlRegion, user_rsp_tmp)),
         ksp = const(offset_of!(ProcessorControlRegion, tss) + offset_of!(TaskStateSegment, privilege_stack_table)),
-        cs_sel = const(SegmentSelector::new(4, Ring3).0),
-        ss_sel = const(SegmentSelector::new(5, Ring3).0),
+        cs_sel = const(SegmentSelector::new(5, Ring3).0),
+        ss_sel = const(SegmentSelector::new(4, Ring3).0),
 
         options(noreturn),
     );

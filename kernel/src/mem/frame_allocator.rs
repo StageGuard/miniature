@@ -138,44 +138,34 @@ impl LinkedRangeIterator {
         }
     }
 
-    /// next windowed value after right boundary.
-    /// `neg_offset` should be smaller than `self.window`
-    fn next_windowed_after(start: u64, window: u64, range_right: u64) -> u64 {
-        if start >= range_right {
-            panic!("start should be smaller than range_right, start = {start}, range_right = {range_right}");
-        }
-
-        // TODO: impl with O(1) algorithm
-        let mut curr = start;
-        while curr < range_right {
-            curr += window;
-        }
-
-        return curr;
-    }
-
     fn next_n(&mut self, count: usize) -> Option<u64> {
-        let mut curr = self.current_value;
-
         let required_size = self.window * count as u64;
 
         // iterates over the last range.
         if self.current_range_index == self.range_size {
+            let r = self.current_value.clone();
             self.current_value += required_size;
-            return Some(self.current_value);
+            return Some(r);
         }
 
         // if not overlapped with next range.
-        if curr + required_size < self.ranges[self.current_range_index].start {
+        if self.current_value + required_size <= self.ranges[self.current_range_index].start {
+            let r = self.current_value.clone();
             self.current_value += required_size;
-            return Some(self.current_value);
+            return Some(r);
         }
 
+        // make current value overlap with current range
+        self.current_value += required_size;
+        let mut curr = self.current_value.clone();
         let mut overlapped = true;
 
         while overlapped && self.current_range_index < self.range_size {
             let current_range = &self.ranges[self.current_range_index];
-            curr = Self::next_windowed_after(curr, required_size, current_range.end);
+
+            while current_range.contains(&curr) {
+                curr += required_size;
+            }
 
             self.current_range_index += 1;
 
@@ -184,7 +174,7 @@ impl LinkedRangeIterator {
         }
 
         self.current_value = curr;
-        Some(curr)
+        self.next_n(count)
     }
 }
 

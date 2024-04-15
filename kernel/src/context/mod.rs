@@ -10,7 +10,7 @@ use crate::mem::aligned_box::AlignedBox;
 use crate::context::signal::SignalState;
 use crate::context::status::{HardBlockedReason, Status};
 use crate::cpu::{LogicalCpuId, PercpuBlock};
-use crate::int_like;
+use crate::{infohart, int_like};
 use crate::mem::{get_kernel_pml4_page_table_addr, PAGE_SIZE};
 use crate::mem::user_addr_space::{RwLockUserAddrSpace, UserAddrSpace};
 use crate::syscall::InterruptStack;
@@ -33,7 +33,7 @@ pub struct Context {
     // is the context in syscall_module
     pub inside_syscall: bool,
     // kernel stack
-    pub kstack: Option<AlignedBox<[u8; 64 * PAGE_SIZE], { PAGE_SIZE }>>,
+    pub kstack: Option<&'static [u8]>,
     // context status
     pub status: Status,
     // signal state
@@ -155,7 +155,8 @@ impl Context {
             return None;
         };
         let range = kstack.len().checked_sub(mem::size_of::<InterruptStack>())?..;
-        Some(unsafe { &mut *kstack.get_mut(range)?.as_mut_ptr().cast() })
+        let stack = kstack.get(range)?.as_ptr() as *const _ as u64 as *mut u8;
+        Some(unsafe { &mut *stack.cast() })
     }
 }
 

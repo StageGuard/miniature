@@ -2,21 +2,29 @@ use alloc::collections::{BTreeMap, VecDeque};
 use alloc::sync::Arc;
 use core::cell::{Cell, RefCell};
 use core::hint::spin_loop;
-use core::mem::size_of;
+use core::mem::{offset_of, size_of};
 use core::ops::{Add, Index, RangeBounds};
+use core::ptr;
+use core::ptr::{slice_from_raw_parts, slice_from_raw_parts_mut};
+use core::slice::from_raw_parts;
 use core::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use lazy_static::lazy_static;
+use log::info;
 use spin::{RwLock, RwLockReadGuard, RwLockWriteGuard};
 use spinning_top::RwSpinlock;
+use x86_64::structures::paging::{Page, PageTableFlags, PhysFrame, Size4KiB};
+use x86_64::{PhysAddr, VirtAddr};
+use x86_64::structures::paging::mapper::TranslateResult;
 use shared::print_panic::PrintPanic;
 use shared::uni_processor::UPSafeCell;
 use crate::context::{Context, ContextId};
-use crate::{CPU_COUNT, infohart, warnhart};
+use crate::{CPU_COUNT, infohart, qemu_println, warnhart};
 use crate::mem::aligned_box::AlignedBox;
 use crate::mem::heap::OutOfMemory;
 use crate::mem::PAGE_SIZE;
-use crate::syscall::{enter_usermode, InterruptStack};
+use crate::syscall::{enter_usermode, InterruptStack, IretRegisters};
 use libvdso::error::{EAGAIN, ENOMEM};
+use crate::mem::frame_allocator::frame_alloc_n;
 use crate::mem::user_addr_space::RwLockUserAddrSpace;
 
 lazy_static! {
@@ -119,16 +127,45 @@ impl ContextStorage {
         userspace_allowed: bool,
         func: extern "C" fn()
     ) -> Result<&Arc<RwSpinlock<Context>>, i32> {
-        let mut stack = match AlignedBox::<[u8; PAGE_SIZE * 64], { PAGE_SIZE }>::try_zeroed() {
-            Ok(value) => { value }
-            Err(OutOfMemory) => { return Err(ENOMEM) }
+        let mut stack = match frame_alloc_n(64) {
+            Some(frame) => unsafe {
+                let ptr = frame.start_address().as_u64() as *mut u8;
+                ptr::write_bytes(ptr, 0, PAGE_SIZE * 64);
+                slice_from_raw_parts_mut(ptr, PAGE_SIZE * 64)
+            }
+            None => return Err(ENOMEM)
         };
 
         let new_context_lock = self.new_context()?;
         let mut new_context = new_context_lock.write();
-        new_context.set_addr_space(unsafe { Some(RwLockUserAddrSpace::new(&new_context_lock, 0x1000)) });
+        let addrsp = unsafe { RwLockUserAddrSpace::new(&new_context_lock, 0x1000) };
 
+        {   // make kernel stack accessible for user space
+            let mut rsp_cloned = Arc::clone(&addrsp);
+            let mut rsp_guard = rsp_cloned.acquire_write();
+            // 0x7fc0000000 是 PageTable[0][510] 1gb 页的起始虚拟地址
+            let kstack_start_page = Page::<Size4KiB>::containing_address(VirtAddr::new(0x7f_8000_0000));
+            let kstack_start_frame = PhysFrame::containing_address(PhysAddr::new(stack.as_mut_ptr() as u64));
+            // stack start may not 4k aligned, so update one more page
+            for page in Page::range(kstack_start_page, kstack_start_page + 64) {
+                unsafe {
+                    rsp_guard.raw_map_to(
+                        page,
+                        kstack_start_frame + (page - kstack_start_page),
+                        PageTableFlags::PRESENT |
+                            PageTableFlags::USER_ACCESSIBLE |
+                            PageTableFlags::WRITABLE |
+                            PageTableFlags::NO_EXECUTE
+                    )
+                }
+            }
+        }
+
+        new_context.set_addr_space(Some(addrsp));
+
+        infohart!("stack: {:x}", stack.as_mut_ptr() as u64);
         let mut stack_top = unsafe { stack.as_mut_ptr().add(PAGE_SIZE * 64) };
+        infohart!("stack: {:x}", stack_top as u64);
         const INT_REGS_SIZE: usize = size_of::<InterruptStack>();
 
         unsafe {
@@ -136,7 +173,10 @@ impl ContextStorage {
                 // Zero-initialize InterruptStack registers.
                 stack_top = stack_top.sub(INT_REGS_SIZE);
                 stack_top.write_bytes(0_u8, INT_REGS_SIZE);
-                (&mut *stack_top.cast::<InterruptStack>()).init();
+                let intr_stack = &mut *stack_top.cast::<InterruptStack>();
+                intr_stack.init();
+                let rsp_field_offset = offset_of!(InterruptStack, iret) + offset_of!(IretRegisters, rsp);
+                intr_stack.set_stack_pointer(0x7f_8000_0000 + PAGE_SIZE * 64 - INT_REGS_SIZE + rsp_field_offset + size_of::<usize>());
 
                 stack_top = stack_top.sub(size_of::<usize>());
                 stack_top.cast::<usize>().write(enter_usermode as usize);
@@ -147,7 +187,7 @@ impl ContextStorage {
         }
 
         new_context.ctx_regs.set_stack_pointer(stack_top as usize);
-        new_context.kstack = Some(stack);
+        new_context.kstack = Some(unsafe { &*stack });
         new_context.userspace = userspace_allowed;
 
         drop(new_context);

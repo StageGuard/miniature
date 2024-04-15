@@ -210,61 +210,61 @@ pub unsafe fn setup_apic(apic_base: u64, cpu_id: LogicalCpuId) {
     outb(0xa1, 0xff);
 
     // initialize LAPIC to a well known state
-    // flat mode 
-    LOCAL_APIC.write(0xe0, 0xffffffff); // Destination Format Register
-    LOCAL_APIC.write(0xd0, (LOCAL_APIC.read(0xd0) & 0xffffff) | 1); // Logical Destination Register
-    //clear lvt
-    LOCAL_APIC.set_lvt_timer(0x10000); // LVT Timer Register
-    LOCAL_APIC.write(0x340, 4 << 8); // LVT Performance Monitoring Counters Register
-    LOCAL_APIC.write(0x350, 0x10000); // LVT LINT0 Register
-    LOCAL_APIC.write(0x360, 0x10000); // LVT LINT1 Register
-    // clear TPR, receiving all interrupts
-    LOCAL_APIC.write(0x80, 0); // Task Priority Register
+    // flat mode
+    //LOCAL_APIC.write(0xe0, 0xffffffff); // Destination Format Register
+    //LOCAL_APIC.write(0xd0, (LOCAL_APIC.read(0xd0) & 0xffffff) | 1); // Logical Destination Register
+    ////clear lvt
+    //LOCAL_APIC.set_lvt_timer(0x10000); // LVT Timer Register
+    //LOCAL_APIC.write(0x340, 4 << 8); // LVT Performance Monitoring Counters Register
+    //LOCAL_APIC.write(0x350, 0x10000); // LVT LINT0 Register
+    //LOCAL_APIC.write(0x360, 0x10000); // LVT LINT1 Register
+    //// clear TPR, receiving all interrupts
+    //LOCAL_APIC.write(0x80, 0); // Task Priority Register
 
     // software enable, map spurious interrupt to dummy isr
     LOCAL_APIC.write(0xf0, LOCAL_APIC.read(0xf0) | 0x100); // Spurious Interrupt Vector Register
 
     // map APIC timer to an interrupt, and by that enable it in one-shot mode
-    LOCAL_APIC.set_lvt_timer(LAPIC_TIMER_HANDLER_IDT); // LVT Timer Register
-    // set up divide value to 1
-    LOCAL_APIC.set_div_conf(0xb); // Divide Configuration Register
-
-    // initialize PIT Ch 2 in one-shot mode
-    // PIT has fixed frequency 1193182 Hz, so let PIT ch2 tick 10ms.
-    outb(0x61, (inb(0x61) & 0xfd) | 1);
-    outb(0x43, 0b10110010);
-
-    const FREQ: u32 = 1193182 / 100;
-
-    outb(0x42, (FREQ & 0xff) as u8);
-    inb(0x60);
-    outb(0x42, ((FREQ >> 8) & 0xff) as u8);
+    //LOCAL_APIC.set_lvt_timer(LAPIC_TIMER_HANDLER_IDT); // LVT Timer Register
+    //// set up divide value to 1
+    //LOCAL_APIC.set_div_conf(0xb); // Divide Configuration Register
+//
+    //// initialize PIT Ch 2 in one-shot mode
+    //// PIT has fixed frequency 1193182 Hz, so let PIT ch2 tick 10ms.
+    //outb(0x61, (inb(0x61) & 0xfd) | 1);
+    //outb(0x43, 0b10110010);
+//
+    //const FREQ: u32 = 1193182 / 100;
+//
+    //outb(0x42, (FREQ & 0xff) as u8);
+    //inb(0x60);
+    //outb(0x42, ((FREQ >> 8) & 0xff) as u8);
 
     // reset PIT one-shot counter (start counting)
-    let pit2_gate = inb(0x61) & 0xfe;
-    outb(0x61, pit2_gate); // gate low
-    outb(0x61, pit2_gate | 1); // gate high
-
-    // reset APIC timer
-    LOCAL_APIC.set_init_count(0xffffffff /* = -1 */); // Initial Count Register (for Timer)
-
-    // wait until PIT counter reaches 0
-    let mut port_pit2_gate: PortGeneric<u8, ReadWriteAccess> = Port::new(0x61);
-    while port_pit2_gate.read() & 0x20 == 0 { }
-    // stop APIC timer
-    LOCAL_APIC.set_lvt_timer(0x10000); // LVT Timer Register
-
-    // 0x390 = Current Count Register (for Timer)
-    let lapic_ticks_in_10_ms: u32 = 0xffffffff - LOCAL_APIC.read(0x390);
-
-    // apply freq
-    // 0x2000 = periodic mode
-    LOCAL_APIC.set_lvt_timer(LAPIC_TIMER_HANDLER_IDT | 0x20000); // LVT Timer Register
-    LOCAL_APIC.set_div_conf(0xb); // Divide Configuration Register
-    // let apic timer send irq every 1ms
-    LOCAL_APIC.set_init_count(lapic_ticks_in_10_ms / 10); // Initial Count Register (for Timer)
+    //let pit2_gate = inb(0x61) & 0xfe;
+    //outb(0x61, pit2_gate); // gate low
+    //outb(0x61, pit2_gate | 1); // gate high
+//
+    //// reset APIC timer
+    //LOCAL_APIC.set_init_count(0xffffffff /* = -1 */); // Initial Count Register (for Timer)
+//
+    //// wait until PIT counter reaches 0
+    //let mut port_pit2_gate: PortGeneric<u8, ReadWriteAccess> = Port::new(0x61);
+    //while port_pit2_gate.read() & 0x20 == 0 { }
+    //// stop APIC timer
+    //LOCAL_APIC.set_lvt_timer(0x10000); // LVT Timer Register
+//
+    //// 0x390 = Current Count Register (for Timer)
+    //let lapic_ticks_in_10_ms: u32 = 0xffffffff - LOCAL_APIC.read(0x390);
+//
+    //// apply freq
+    //// 0x2000 = periodic mode
+    //LOCAL_APIC.set_lvt_timer(LAPIC_TIMER_HANDLER_IDT | 0x20000); // LVT Timer Register
+    //LOCAL_APIC.set_div_conf(0xb); // Divide Configuration Register
+    //// let apic timer send irq every 1ms
+    //LOCAL_APIC.set_init_count(lapic_ticks_in_10_ms / 10); // Initial Count Register (for Timer)
 
     LOCAL_APIC.set_lvt_error(49u32);
 
-    infohart!("BSP LAPIC initialized, CPU bus frequency: {} Hz", lapic_ticks_in_10_ms * 100);
+    //infohart!("BSP LAPIC initialized, CPU bus frequency: {} Hz", lapic_ticks_in_10_ms * 100);
 }

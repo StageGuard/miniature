@@ -17,12 +17,7 @@ impl KError {
     }
 
     pub fn demux(value: usize) -> KResult<usize> {
-        let errno = -(value as i32);
-        if errno >= 1 && errno < ENOTRECOVERABLE {
-            Err(KError::new(errno))
-        } else {
-            Ok(value)
-        }
+        Ok(value)
     }
 }
 

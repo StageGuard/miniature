@@ -16,7 +16,8 @@ const IOBITMAP_SIZE: u32 = 65536 / 8;
 // TODO: each cpu should has its own interrupt stack
 static mut DOUBLE_FAULT_STACK: [u8; STACK_SIZE] = [0; STACK_SIZE];
 
-pub static GDT_USER_CODE: Once<SegmentSelector> = Once::new();
+pub static GDT_KERNEL_CODE32: Once<SegmentSelector> = Once::new();
+pub static GDT_USER_CODE64: Once<SegmentSelector> = Once::new();
 pub static GDT_USER_DATA: Once<SegmentSelector> = Once::new();
 
 #[repr(C, align(4096))]
@@ -51,6 +52,7 @@ impl ProcessorControlRegion {
 }
 
 // from redox-os kernel
+#[cold]
 pub unsafe fn init_gdt(cpu_id: LogicalCpuId, kernel_stack_top: u64) {
     let pcr = &mut *(frame_alloc_n(size_of::<ProcessorControlRegion>().div_ceil(PAGE_SIZE))
         .expect("failed to allocate phys farme for ProcessorControlRegion")
@@ -68,9 +70,9 @@ pub unsafe fn init_gdt(cpu_id: LogicalCpuId, kernel_stack_top: u64) {
     // GDT[0] = NULL
     let code_selector = pcr.gdt.add_entry(Descriptor::kernel_code_segment()); // GDT[1] = KERNEL_CODE,
     let data_selector = pcr.gdt.add_entry(Descriptor::kernel_data_segment()); // GDT[2] = KERNEL_DATA
-    pcr.gdt.add_entry(Descriptor::UserSegment(DescriptorFlags::USER_CODE32.bits())); // GDT[3] = USER_CODE_32
-    GDT_USER_CODE.call_once(|| pcr.gdt.add_entry(Descriptor::user_code_segment())); // GDT[4] = USER_CODE
-    GDT_USER_DATA.call_once(|| pcr.gdt.add_entry(Descriptor::user_data_segment())); // GDT[5] = USER_DATA
+    GDT_KERNEL_CODE32.call_once(|| pcr.gdt.add_entry(Descriptor::UserSegment(DescriptorFlags::KERNEL_CODE32.bits()))); // GDT[3] = KERNEL_CODE_32
+    GDT_USER_DATA.call_once(|| pcr.gdt.add_entry(Descriptor::user_data_segment())); // GDT[4] = USER_DATA
+    GDT_USER_CODE64.call_once(|| pcr.gdt.add_entry(Descriptor::user_code_segment())); // GDT[5] = USER_CODE
     let tss_selector = pcr.gdt.add_entry(Descriptor::tss_segment(&pcr.tss)); // GDT[6..8] = TSS
 
     pcr.gdt.load_unsafe();

@@ -37,6 +37,7 @@ pub fn setup_ap_startup(lapics: &[MadtLocalApic], kernel_page_table: VirtAddr) {
             .expect("failed to allocate kernel stack for ap")
             .start_address()
             .as_u64();
+        infohart!("ap stack: {:x}", stack_start);
         let stack_end = stack_start + 64 * 4096;
 
         let ap_ready = (TRAMPOLINE + 8) as *mut u64;
@@ -62,7 +63,6 @@ pub fn setup_ap_startup(lapics: &[MadtLocalApic], kernel_page_table: VirtAddr) {
 
         {   // INIT
             let mut icr = 0x4500 | (id as u64) << if lapic.x2 { 32 } else { 56 };
-            infohart!("    lapic {} INIT...", id);
             lapic.set_icr(icr);
         }
 
@@ -70,7 +70,6 @@ pub fn setup_ap_startup(lapics: &[MadtLocalApic], kernel_page_table: VirtAddr) {
         {  // START IPI
             let mut icr = 0x4600 | ((TRAMPOLINE >> 12) & 0xFF) as u64;
             icr |= (id as u64) << if lapic.x2 { 32 } else { 56 };
-            infohart!("    lapic {} SIPI...", id);
             lapic.set_icr(icr);
         }
 
@@ -79,11 +78,9 @@ pub fn setup_ap_startup(lapics: &[MadtLocalApic], kernel_page_table: VirtAddr) {
         while unsafe { (*ap_ready.cast::<AtomicU8>()).load(Ordering::SeqCst) } == 0 {
             spin_loop()
         }
-        infohart!("    lapic {} trampoline...", id);
         while !AP_READY.load(Ordering::SeqCst) {
             spin_loop()
         }
-        infohart!("    lapic {} ready", id);
 
         // imme
         unsafe {

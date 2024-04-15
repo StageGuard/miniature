@@ -1,15 +1,23 @@
 use alloc::{boxed::Box, collections::BTreeMap};
+use alloc::sync::Arc;
 use lazy_static::lazy_static;
 use log::info;
 use shared::{print_panic::PrintPanic};
-use spin::{Mutex, RwLock};
-use x86_64::{registers::control::Cr2, structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode}, VirtAddr};
+use spin::{Mutex, RwLock, RwLockReadGuard};
+use x86_64::{PhysAddr, registers::control::Cr2, structures::idt::{InterruptDescriptorTable, InterruptStackFrame, PageFaultErrorCode}, VirtAddr};
 use core::{fmt::Write};
 use core::arch::asm;
+use core::hint::spin_loop;
+use core::slice::from_raw_parts;
+use x86_64::instructions::interrupts;
+use x86_64::structures::paging::{PhysFrame, Size4KiB};
+use x86_64::structures::paging::mapper::TranslateResult;
 
-use crate::{acpi::local_apic::LOCAL_APIC, cpu::LogicalCpuId, device::qemu::exit_qemu, gdt::{pcr}, halt, infohart, mem::{frame_allocator::frame_alloc_n, PAGE_SIZE}, qemu_print, qemu_println};
+use crate::{acpi::local_apic::LOCAL_APIC, cpu::LogicalCpuId, device::qemu::exit_qemu, gdt::{pcr}, halt, infohart, interrupt, interrupt_error, interrupt_stack, mem::{frame_allocator::frame_alloc_n, PAGE_SIZE}, qemu_print, qemu_println};
 use crate::arch_spec::port::inb;
 use crate::ipi::IpiKind;
+use crate::{push_preserved, push_scratch, pop_preserved, pop_scratch, swapgs_iff_ring3_fast, swapgs_iff_ring3_fast_errorcode, nop, conditional_swapgs_back_paranoid, conditional_swapgs_paranoid};
+use crate::context::list::{context_storage, ContextStorage};
 
 const DEPENDENT_STACK_SIZE: usize = 65536;
 pub const LAPIC_TIMER_HANDLER_IDT: u32 = 48;
@@ -117,64 +125,41 @@ pub unsafe fn enable_and_nop() {
     core::arch::asm!("sti; nop", options(nomem, nostack));
 }
 
-macro_rules! interrupt {
-    ($name:ident) => {
-        extern "x86-interrupt" fn $name(stack_frame: InterruptStackFrame) -> ! {
-            qemu_println!("EXCEPTION: {}, {:?}",stringify!($name), stack_frame);
-            halt();
-        }
-    };
-    ($name:ident, @err_code) => {
-        extern "x86-interrupt" fn $name(stack_frame: InterruptStackFrame, error_code: u64) -> ! {
-            qemu_println!("EXCEPTION: {} code: {}, {:?}",stringify!($name), error_code, stack_frame);
-            halt();
-        }
-    };
-    ($name:ident, !, |$stack_frame:ident $(, $error_code:ident)?| $code:block) => {
-        extern "x86-interrupt" fn $name($stack_frame: InterruptStackFrame$(, $error_code: u64)?) -> ! {
-            #[allow(unused_unsafe)]
-            unsafe { $code }
-        }
-    };
-    ($name:ident, |$stack_frame:ident $(, $error_code:ident)?| $code:block) => {
-        extern "x86-interrupt" fn $name($stack_frame: InterruptStackFrame$(, $error_code: u64)?) {
-            #[allow(unused_unsafe)]
-            unsafe { $code };
-        }
-    };
-}
-
 // exceptions
-interrupt!(divide_error);
-interrupt!(debug);
-interrupt!(non_maskable_interrupt);
-interrupt!(breakpoint);
-interrupt!(overflow);
-interrupt!(bound_range_exceeded);
-interrupt!(invalid_opcode);
-interrupt!(device_not_available);
-interrupt!(hv_injection_exception);
-interrupt!(machine_check);
-interrupt!(simd_floating_point);
-interrupt!(virtualization);
-interrupt!(x87_floating_point);
-interrupt!(page_fault, !, |stack, err_code| {
-    qemu_println!("EXCEPTION: PAGE FAULT: access violation while reading 0x{:x}: {:?}\nstack: {:?}", Cr2::read(), stack, err_code);
-    halt();
+interrupt_stack!(divide_error, |stack| { qemu_println!("divide_error: stack: {:?}", stack) });
+interrupt_stack!(debug, @paranoid, |stack| { qemu_println!("debug: stack: {:?}", stack) });
+interrupt_stack!(non_maskable_interrupt, @paranoid, |stack| { qemu_println!("non_maskable_interrupt: stack: {:?}", stack) });
+interrupt_stack!(breakpoint, |stack| { qemu_println!("breakpoint: stack: {:?}", stack) });
+interrupt_stack!(overflow, |stack| { qemu_println!("overflow: stack: {:?}", stack) });
+interrupt_stack!(bound_range_exceeded, |stack| { qemu_println!("bound_range_exceeded: stack: {:?}", stack) });
+interrupt_stack!(invalid_opcode, |stack| { qemu_println!("invalid_opcode: stack: {:?}", stack) });
+interrupt_stack!(device_not_available, |stack| { qemu_println!("device_not_available: stack: {:?}", stack) });
+interrupt_stack!(hv_injection_exception, |stack| { qemu_println!("hv_injection_exception: stack: {:?}", stack) });
+interrupt_stack!(machine_check, |stack| { qemu_println!("machine_check: stack: {:?}", stack) });
+interrupt_stack!(simd_floating_point, |stack| { qemu_println!("simd_floating_point: stack: {:?}", stack) });
+interrupt_stack!(virtualization, |stack| { qemu_println!("virtualization: stack: {:?}", stack) });
+interrupt_stack!(x87_floating_point, |stack| { qemu_println!("x87_floating_point: stack: {:?}", stack) });
+interrupt_stack!(cp_protection_exception, |stack| { qemu_println!("page_fault, stack: {:?}", stack) });
+interrupt_stack!(vmm_communication_exception, |stack| { qemu_println!("page_fault, stack: {:?}", stack) });
+
+interrupt_error!(page_fault, |stack, code| {
+    let slice = from_raw_parts((stack.iret.rsp - 0x48) as *const u8, 0x48usize);
+    qemu_println!("calle stacks: {:02x?}", slice);
+
+    qemu_println!("page_fault: reading {:x}: {}, stack: {:?}", Cr2::read().as_u64(), code, stack);
+    loop { spin_loop() }
 });
-interrupt!(invalid_tss, @err_code);
-interrupt!(double_fault, @err_code);
-interrupt!(segment_not_present, @err_code);
-interrupt!(stack_segment_fault, @err_code);
-interrupt!(general_protection_fault, @err_code);
-interrupt!(alignment_check, @err_code);
-interrupt!(cp_protection_exception, @err_code);
-interrupt!(vmm_communication_exception, @err_code);
-interrupt!(security_exception, @err_code);
+interrupt_error!(invalid_tss, |stack, code| { qemu_println!("invalid_tss: {}, stack: {:?}", code, stack) });
+interrupt_error!(double_fault, |stack, code| { qemu_println!("double_fault: {}, stack: {:?}", code, stack) });
+interrupt_error!(segment_not_present, |stack, code| { qemu_println!("segment_not_present: {}, stack: {:?}", code, stack) });
+interrupt_error!(stack_segment_fault, |stack, code| { qemu_println!("stack_segment_fault: {}, stack: {:?}", code, stack) });
+interrupt_error!(general_protection_fault, |stack, code| { qemu_println!("general_protection_fault: {}, stack: {:?}", code, stack) });
+interrupt_error!(alignment_check, |stack, code| { qemu_println!("alignment_check: {}, stack: {:?}", code, stack) });
+interrupt_error!(security_exception, |stack, code| { qemu_println!("security_exception: {}, stack: {:?}", code, stack) });
 
 // legacy irqs
-interrupt!(pit_stack, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(keyboard, |_stack| {
+interrupt!(pit_stack, || { LOCAL_APIC.eoi() });
+interrupt!(keyboard, || {
     use pc_keyboard::{layouts, DecodedKey, HandleControl, Keyboard, ScancodeSet1};
     use spin::Mutex;
 
@@ -196,30 +181,30 @@ interrupt!(keyboard, |_stack| {
         }
     }
 });
-interrupt!(cascade, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(com2, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(com1, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(lpt2, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(floppy, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(lpt1, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(rtc, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(pci1, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(pci2, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(pci3, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(mouse, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(fpu, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(ata1, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(ata2, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(lapic_timer, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(lapic_error, |_stack| { });
+interrupt!(cascade, || { LOCAL_APIC.eoi() });
+interrupt!(com2, || { LOCAL_APIC.eoi() });
+interrupt!(com1, || { LOCAL_APIC.eoi() });
+interrupt!(lpt2, || { LOCAL_APIC.eoi() });
+interrupt!(floppy, || { LOCAL_APIC.eoi() });
+interrupt!(lpt1, || { LOCAL_APIC.eoi() });
+interrupt!(rtc, || { LOCAL_APIC.eoi() });
+interrupt!(pci1, || { LOCAL_APIC.eoi() });
+interrupt!(pci2, || { LOCAL_APIC.eoi() });
+interrupt!(pci3, || { LOCAL_APIC.eoi() });
+interrupt!(mouse, || { LOCAL_APIC.eoi() });
+interrupt!(fpu, || { LOCAL_APIC.eoi() });
+interrupt!(ata1, || { LOCAL_APIC.eoi() });
+interrupt!(ata2, || { LOCAL_APIC.eoi() });
+interrupt!(lapic_timer, || { LOCAL_APIC.eoi() });
+interrupt!(lapic_error, || { });
 
 // ipis
-interrupt!(ipi_wakeup, |_stack| {
+interrupt!(ipi_wakeup, || {
     infohart!("ipi wakeup");
     LOCAL_APIC.eoi()
 });
-interrupt!(ipi_switch, |_stack| { LOCAL_APIC.eoi() });
-interrupt!(ipi_pit, |_stack| { LOCAL_APIC.eoi() });
+interrupt!(ipi_switch, || { LOCAL_APIC.eoi() });
+interrupt!(ipi_pit, || { LOCAL_APIC.eoi() });
 
 
 #[test_case]

@@ -9,10 +9,11 @@ use spin::RwLockWriteGuard;
 use shared::{arg::TlsTemplate, print_panic::PrintPanic};
 use crate::infohart;
 use crate::mem::frame_allocator::frame_alloc;
+use crate::mem::PAGE_SIZE;
 use crate::mem::user_addr_space::{RwLockUserAddrSpace, UserAddrSpace};
 
 /// load elf to userspace, return entry point
-pub unsafe fn map_elf_to_addrsp(
+pub unsafe fn elf_copy_to_addrsp(
     elf: &[u8],
     addrsp: Arc<RwLockUserAddrSpace>
 ) -> VirtAddr {
@@ -79,8 +80,8 @@ pub unsafe fn map_elf_to_addrsp(
 
         match sh_type {
             ShType::Load => { // Loadable segment
-            infohart!("loading LOAD segment to virt addr 0x{:x}, file_size = {}, mem_size = {}",
-                ph.virtual_addr(), ph.file_size(), ph.mem_size()
+            infohart!("loading LOAD segment from phys addr 0x{:x} to virt addr 0x{:x}, file_size = {}, mem_size = {}",
+                seg_bytes_start_addr.as_u64(), ph.virtual_addr(), ph.file_size(), ph.mem_size()
             );
 
                 let seg_flags = {
@@ -91,10 +92,20 @@ pub unsafe fn map_elf_to_addrsp(
                 };
 
                 // setup mapping to the fs part of segment and kernel pml4 table.
-                for phys_frame in PhysFrame::range_inclusive(seg_bytes_start_phys_frame, seg_bytes_end_phys_frame) {
-                    let seg_page = seg_start_page + (phys_frame - seg_bytes_start_phys_frame);
+                for original_frame in PhysFrame::range_inclusive(seg_bytes_start_phys_frame, seg_bytes_end_phys_frame) {
+                    let seg_page = seg_start_page + (original_frame - seg_bytes_start_phys_frame);
 
-                    addrsp_guard.raw_map_to(seg_page, phys_frame, seg_flags);
+                    let new_frame = frame_alloc()
+                        .or_panic("failed to allocate new phys frame for bss segment.");
+
+                    ptr::copy(
+                        original_frame.start_address().as_u64() as *const u8,
+                        new_frame.start_address().as_u64() as *mut u8,
+                        PAGE_SIZE
+                    );
+
+                    addrsp_guard.raw_map_to(seg_page, new_frame, seg_flags);
+                    addrsp_guard.push_tracked_frame(new_frame);
                 }
 
                 // 段没有 .bss 部分
@@ -133,7 +144,7 @@ pub unsafe fn map_elf_to_addrsp(
                 // 其他 bss 段
                 // 分配新的物理页帧然后映射
                 let seg_bss_start_page = Page::<Size4KiB>::containing_address(
-                    VirtAddr::new(align_up(seg_bss_start_virt_addr.as_u64(), 4096))
+                    VirtAddr::new(align_up(seg_bss_start_virt_addr.as_u64(), PAGE_SIZE as u64))
                 );
                 let seg_bss_end_page = Page::<Size4KiB>::containing_address(seg_bss_end_virt_addr - 1u64);
 

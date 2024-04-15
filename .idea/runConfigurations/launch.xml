@@ -2,6 +2,7 @@
   <configuration default="false" name="launch" type="Multirun" separateTabs="false" reuseTabsWithFailures="false" startOneByOne="true" markFailedProcess="true" hideSuccessProcess="false" delayTime="0.0">
     <runConfiguration name="build bootloader" type="Cargo" />
     <runConfiguration name="build kernel" type="Cargo" />
+    <runConfiguration name="build bootstrap" type="Cargo" />
     <runConfiguration name="build bootable disk" type="Cargo" />
     <runConfiguration name="run qemu" type="Shell Script" />
     <method v="2" />

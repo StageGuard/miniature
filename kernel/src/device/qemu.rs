@@ -33,6 +33,7 @@ pub fn exit_qemu(exit_code: QemuExitCode) -> ! {
 #[macro_export]
 macro_rules! qemu_print {
     ($fmt: literal $(, $($arg: tt)+)?) => {{
+        use ::core::fmt::Write;
         $crate::device::qemu::STDIO_PORT.lock().write_fmt(format_args!($fmt $(, $($arg)+)?));
     }};
 }

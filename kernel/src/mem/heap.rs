@@ -8,6 +8,7 @@ use spin::Mutex;
 
 const RT_HEAP_SIZE: usize = 0x100_8000;
 const RT_HEAP_FAST_SIZE: usize = 0x8000;
+#[link_section = ".data.heap"]
 pub static mut RT_HEAP_SPACE: [u8; RT_HEAP_SIZE] = [0; RT_HEAP_SIZE];
 
 lazy_static! {

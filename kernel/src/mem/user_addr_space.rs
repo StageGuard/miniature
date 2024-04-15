@@ -15,6 +15,7 @@ use shared::{BOOTSTRAP_BYTES_P4, FRAMEBUFFER_P4, KERNEL_BYTES_P4, KERNEL_STACK_P
 use shared::print_panic::PrintPanic;
 use crate::arch_spec::copy_to;
 use crate::context::Context;
+use crate::infohart;
 use crate::mem::frame_allocator::{frame_alloc, frame_dealloc};
 use crate::mem::{get_kernel_pml4_page_table_addr, PAGE_SIZE};
 use crate::mem::user_buffer::UserBuffer;
@@ -320,11 +321,11 @@ impl UserAddrSpace {
         self.page_table.map_to(
             page,
             frame,
-            flags,
+            flags | PageTableFlags::USER_ACCESSIBLE,
             &mut *(self as *const Self as u64 as *mut Self)
         )
             .or_panic("failed to perform raw map_to")
-            .flush();
+            .ignore();
     }
 
     pub unsafe fn raw_unmap(&mut self, page: Page) {
@@ -340,7 +341,7 @@ impl UserAddrSpace {
     pub unsafe fn raw_update_flags(&mut self, page: Page, flags: PageTableFlags) {
         self.page_table.update_flags(page, flags)
             .or_panic("failed to perform raw update flags")
-            .flush()
+            .ignore()
     }
 
     pub unsafe fn push_tracked_frame(&mut self, frame: PhysFrame) {

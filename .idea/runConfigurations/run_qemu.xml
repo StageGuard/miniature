@@ -1,6 +1,6 @@
 <component name="ProjectRunConfigurationManager">
   <configuration default="false" name="run qemu" type="ShConfigurationType">
-    <option name="SCRIPT_TEXT" value="qemu-system-x86_64 -smp 4 -drive if=pflash,format=raw,readonly=on,file=edk2/OVMF-pure-efi.fd,readonly=on -drive format=raw,file=target/asos.img -device isa-debug-exit,iobase=0xf4,iosize=0x04 -serial stdio -m 1024M -d cpu_reset --no-reboot" />
+    <option name="SCRIPT_TEXT" value="qemu-system-x86_64 -smp 4 -drive if=pflash,format=raw,readonly=on,file=edk2/OVMF-pure-efi.fd,readonly=on -drive format=raw,file=target/asos.img -device isa-debug-exit,iobase=0xf4,iosize=0x04 -serial stdio -m 1024M --no-reboot" />
     <option name="INDEPENDENT_SCRIPT_PATH" value="true" />
     <option name="SCRIPT_PATH" value="" />
     <option name="SCRIPT_OPTIONS" value="" />
